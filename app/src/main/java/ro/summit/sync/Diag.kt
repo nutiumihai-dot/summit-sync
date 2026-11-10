@@ -39,8 +39,19 @@ suspend fun readAll(c: HealthConnectClient, type: KClass<out Record>, start: Ins
 }
 
 fun span(r: Record): Pair<Instant, Instant> = when (r) {
-    is IntervalRecord -> r.startTime to r.endTime
-    is InstantaneousRecord -> r.time to r.time
+    is StepsRecord -> r.startTime to r.endTime
+    is HeartRateRecord -> r.startTime to r.endTime
+    is SleepSessionRecord -> r.startTime to r.endTime
+    is ExerciseSessionRecord -> r.startTime to r.endTime
+    is DistanceRecord -> r.startTime to r.endTime
+    is ActiveCaloriesBurnedRecord -> r.startTime to r.endTime
+    is TotalCaloriesBurnedRecord -> r.startTime to r.endTime
+    is FloorsClimbedRecord -> r.startTime to r.endTime
+    is ElevationGainedRecord -> r.startTime to r.endTime
+    is RestingHeartRateRecord -> r.time to r.time
+    is HeartRateVariabilityRmssdRecord -> r.time to r.time
+    is OxygenSaturationRecord -> r.time to r.time
+    is RespiratoryRateRecord -> r.time to r.time
     else -> Instant.EPOCH to Instant.EPOCH
 }
 
