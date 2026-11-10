@@ -198,3 +198,59 @@ suspend fun runDiagnostic(ctx: Context, days: Int = 14): String {
 object BuildConfigInfo {
     fun version(ctx: Context): String = try { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "?" } catch (e: Exception) { "?" }
 }
+
+// ---------- Test de pași: instantanee succesive ale înregistrărilor de azi, cu diferențele dintre ele ----------
+private fun snapFile(ctx: Context) = java.io.File(ctx.filesDir, "pasi-snap.jsonl")
+
+suspend fun stepSnapshot(ctx: Context): String {
+    val c = HealthConnectClient.getOrCreate(ctx)
+    val now = Instant.now()
+    val d0 = LocalDate.now(Z).atStartOfDay(Z).toInstant()
+    val recs = readAll(c, StepsRecord::class, d0, now.plusSeconds(3600)).filterIsInstance<StepsRecord>()
+    val hr = readAll(c, HeartRateRecord::class, now.minusSeconds(6 * 3600), now).filterIsInstance<HeartRateRecord>()
+    val agg = try {
+        c.aggregate(androidx.health.connect.client.request.AggregateRequest(setOf(StepsRecord.COUNT_TOTAL), TimeRangeFilter.between(d0, now)))[StepsRecord.COUNT_TOTAL] ?: 0
+    } catch (e: Exception) { -1L }
+    val o = org.json.JSONObject().put("t", now.toEpochMilli()).put("agg", agg)
+        .put("hrLast", hr.flatMap { it.samples }.maxOfOrNull { it.time }?.toEpochMilli() ?: 0)
+        .put("hrMod", hr.maxOfOrNull { it.metadata.lastModifiedTime }?.toEpochMilli() ?: 0)
+    val arr = org.json.JSONArray()
+    for (r in recs.sortedBy { it.startTime }) arr.put(org.json.JSONObject().put("id", r.metadata.id).put("s", r.startTime.toEpochMilli()).put("e", r.endTime.toEpochMilli())
+        .put("n", r.count).put("o", r.metadata.dataOrigin.packageName).put("v", r.metadata.clientRecordVersion).put("cid", r.metadata.clientRecordId ?: "")
+        .put("m", r.metadata.lastModifiedTime.toEpochMilli()).put("dev", r.metadata.device?.let { "${it.manufacturer}/${it.model}/${it.type}" } ?: "-"))
+    o.put("r", arr)
+    val f = snapFile(ctx)
+    f.appendText(o.toString() + "\n")
+    return stepReport(ctx, onlyLast = true)
+}
+
+fun stepReset(ctx: Context) { snapFile(ctx).delete() }
+
+fun stepReport(ctx: Context, onlyLast: Boolean = false): String {
+    val lines = runCatching { snapFile(ctx).readLines().filter { it.isNotBlank() } }.getOrDefault(emptyList())
+    if (lines.isEmpty()) return "Niciun instantaneu. Apasă „Pași: instantaneu”."
+    val snaps = lines.map { org.json.JSONObject(it) }
+    val sb = StringBuilder()
+    val tf = DateTimeFormatter.ofPattern("HH:mm:ss")
+    fun ts(ms: Long) = if (ms <= 0) "-" else tf.format(Instant.ofEpochMilli(ms).atZone(Z))
+    fun hmm(ms: Long) = hm(Instant.ofEpochMilli(ms))
+    val range = if (onlyLast) listOf(snaps.size - 1) else snaps.indices.toList()
+    if (!onlyLast) sb.append("TEST PAȘI · Summit Sync ${BuildConfigInfo.version(ctx)} · ${snaps.size} instantanee\n")
+    for (i in range) {
+        val s = snaps[i]; val r = s.getJSONArray("r")
+        val cur = (0 until r.length()).map { r.getJSONObject(it) }
+        val byO = cur.groupBy { it.getString("o") }.mapValues { e -> e.value.sumOf { it.getLong("n") } }
+        sb.append("\n#S$i ${ts(s.getLong("t"))} · agregat HC ${s.getLong("agg")} · brut $byO · puls ultima ${ts(s.getLong("hrLast"))} scris ${ts(s.getLong("hrMod"))}\n")
+        val prev = if (i > 0) snaps[i - 1].getJSONArray("r").let { p -> (0 until p.length()).map { p.getJSONObject(it) } } else emptyList()
+        val pm = prev.associateBy { it.getString("id") }; val cm = cur.associateBy { it.getString("id") }
+        fun desc(x: org.json.JSONObject) = "${hmm(x.getLong("s"))}-${hmm(x.getLong("e"))} n=${x.getLong("n")} ${x.getString("o").substringAfterLast('.')} v${x.getLong("v")} cid=${x.getString("cid").take(24)} dev=${x.getString("dev")} scris ${ts(x.getLong("m"))} id=${x.getString("id").take(6)}"
+        if (i == 0) cur.forEach { sb.append("  = ${desc(it)}\n") }
+        else {
+            cur.filter { it.getString("id") !in pm }.forEach { sb.append("  + ${desc(it)}\n") }
+            cur.filter { it.getString("id") in pm && it.toString() != pm[it.getString("id")].toString() }.forEach { sb.append("  ~ ${desc(pm[it.getString("id")]!!)}\n    → ${desc(it)}\n") }
+            prev.filter { it.getString("id") !in cm }.forEach { sb.append("  - ${desc(it)}\n") }
+            if (cur.size == prev.size && cur.all { it.toString() == pm[it.getString("id")]?.toString() }) sb.append("  (nicio schimbare)\n")
+        }
+    }
+    return sb.toString()
+}

@@ -45,6 +45,11 @@ class MainActivity : ComponentActivity() {
         row.addView(btn("Copiază") { copy() })
         row.addView(btn("Trimite") { share() })
         root.addView(row)
+        val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        row2.addView(btn("Pași: instantaneu") { snap() })
+        row2.addView(btn("Pași: raport") { report = stepReport(this); out.text = report })
+        row2.addView(btn("Pași: șterge") { stepReset(this); out.text = "Instantaneele au fost șterse." })
+        root.addView(row2)
         out = TextView(this).apply { typeface = Typeface.MONOSPACE; textSize = 11f; setTextIsSelectable(true) }
         root.addView(ScrollView(this).apply { addView(out) }, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
@@ -93,6 +98,14 @@ class MainActivity : ComponentActivity() {
             if (!g.containsAll(NEEDED)) { askPerms.launch(ALL_PERMS); return@launch }
             report = try { runDiagnostic(this@MainActivity) } catch (e: Exception) { "EROARE: ${e.javaClass.simpleName}: ${e.message}\n${e.stackTrace.take(6).joinToString("\n")}" }
             out.text = report
+        }
+    }
+
+    private fun snap() {
+        out.text = "Citesc pașii…"
+        lifecycleScope.launch {
+            out.text = try { stepSnapshot(this@MainActivity) } catch (e: Exception) { "EROARE: ${e.javaClass.simpleName}: ${e.message}" }
+            report = stepReport(this@MainActivity)
         }
     }
 
