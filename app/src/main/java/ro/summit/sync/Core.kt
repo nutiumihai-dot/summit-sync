@@ -231,10 +231,15 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant, s
 
     // ---- minute (pași + puls) pentru plimbări și anomalii
     val minute = minuteSteps(inp.steps, d0, d1)
-    o.put("plimbari", JSONArray(walks(inp.steps.filter { it.band && it.start >= d0 && it.start < d1 }, ex).map { (a, b, n) ->
+    // plimbări: pe minut din pedometrul telefonului (când telefonul a fost la el); altfel din blocurile Mi Fitness de 30 min
+    val exact = walksMinute(minuteSteps(inp.steps.filter { !it.band }, d0, d1), d0, ex)
+    val est = walks(inp.steps.filter { it.band && it.start >= d0 && it.start < d1 }, ex).filter { (a, b, _) -> exact.none { overlap(it.first, it.second, a, b) > 0 } }
+    val wl = exact.map { (a, b) -> Triple(a, b, stepsBetween(minute, d0, a, b)) to false } + est.map { it to true }
+    o.put("plimbari", JSONArray(wl.sortedBy { it.first.first }.map { (w, isEst) ->
+        val (a, b, n) = w
         val s = inp.hr.filter { it.t >= a && it.t < b }
-        JSONObject().put("start", hm(a, z)).put("min", (n / P.WALK_SPM_EST).toInt()).put("pasi", n).put("est", true)
-            .also { if (s.isNotEmpty()) it.put("pulsMediu", s.sumOf { x -> x.bpm } / s.size) }
+        JSONObject().put("start", hm(a, z)).put("min", if (isEst) (n / P.WALK_SPM_EST).toInt() else mins(a, b).toInt()).put("pasi", n)
+            .also { if (isEst) it.put("est", true); if (s.isNotEmpty()) it.put("pulsMediu", s.sumOf { x -> x.bpm } / s.size) }
     }))
     o.put("anomalii", JSONArray(anomalies(inp, minute, d0, d1, ex, z)))
     return DayCalc(o, status, purtat)
@@ -299,6 +304,24 @@ fun walks(band: List<StepRec>, ex: List<Exercise>): List<Triple<Instant, Instant
         cur = if (cur != null && mins(cur.second, r.start) <= 1) Triple(cur.first, r.end, cur.third + r.count) else { cur?.let { out += it }; Triple(r.start, r.end, r.count) }
     }
     cur?.let { out += it }
+    return out
+}
+
+/** Plimbări pe minut: min. 10 min la peste 80 pași/min, pauze sub 2 min, în afara antrenamentelor. */
+fun walksMinute(m: LongArray, d0: Instant, ex: List<Exercise>): List<Pair<Instant, Instant>> {
+    val out = mutableListOf<Pair<Instant, Instant>>()
+    var start = -1; var lastGood = -1
+    fun close() {
+        if (start >= 0 && lastGood - start + 1 >= 10) {
+            val a = d0.plusSeconds(start * 60L); val b = d0.plusSeconds((lastGood + 1) * 60L)
+            if (ex.none { overlap(it.start, it.end, a, b) > 0 }) out += a to b
+        }
+        start = -1
+    }
+    for (k in m.indices) {
+        if (m[k] >= 80) { if (start < 0) start = k; lastGood = k } else if (start >= 0 && k - lastGood > 2) close()
+    }
+    close()
     return out
 }
 

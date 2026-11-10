@@ -158,4 +158,28 @@ class CoreTest {
         assertNull(q(ok + ("ret" to "https://evil.example/")))
         assertNull(q(ok + ("cod" to "AB!")))
     }
+
+    @Test fun pasi_caInTestulDin10Nov() {
+        // Mi Fitness: bloc 14:30 = max(brățară 500, telefon 944) = 944; sistemul (android) pe minut, 245 de pași 14:48–14:51
+        val steps = listOf(
+            StepRec(at("2026-11-10T14:30"), at("2026-11-10T14:59"), 944, band = true),
+            StepRec(at("2026-11-10T14:48"), at("2026-11-10T14:49"), 89, band = false),
+            StepRec(at("2026-11-10T14:49"), at("2026-11-10T14:51"), 155, band = false),
+        )
+        val hr = hrEvery("2026-11-10T14:00", "2026-11-10T15:30", stepMin = 10)
+        val inp = input("2026-11-10T16:00", hr, steps = steps, lastSync = "2026-11-10T15:30")
+        val p = computeDay(LocalDate.parse("2026-11-10"), inp, emptyList(), at("2026-11-10T15:30")).json.getJSONObject("pasi")
+        assertEquals(944, p.getLong("total"))   // ora 14 purtată: brățara, fără să adune telefonul
+        assertEquals(0, p.getLong("telefon"))
+    }
+
+    @Test fun plimbarePeMinut_dinTelefon() {
+        val steps = (0 until 12).map { StepRec(at("2026-11-09T17:00").plusSeconds(it * 60L), at("2026-11-09T17:01").plusSeconds(it * 60L), 100, false) } +
+            StepRec(at("2026-11-09T17:00"), at("2026-11-09T17:29"), 1300, true)
+        val inp = input("2026-11-10T08:00", hrEvery("2026-11-09T00:00", "2026-11-10T00:00", stepMin = 10), steps = steps, lastSync = "2026-11-10T07:00")
+        val w = computeDay(LocalDate.parse("2026-11-09"), inp, emptyList(), at("2026-11-10T07:00")).json.getJSONArray("plimbari")
+        assertEquals(1, w.length())
+        assertEquals(12, w.getJSONObject(0).getInt("min"))
+        assertFalse(w.getJSONObject(0).has("est"))
+    }
 }
