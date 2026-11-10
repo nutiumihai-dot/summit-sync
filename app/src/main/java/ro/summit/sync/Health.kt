@@ -69,7 +69,9 @@ suspend fun loadInput(ctx: Context, req: Request): Input {
     val resting = readAll(c, RestingHeartRateRecord::class, dayStart, now).filterIsInstance<RestingHeartRateRecord>()
         .filter { it.metadata.dataOrigin.packageName == BAND_PKG }.map { Resting(it.time, it.beatsPerMinute.toInt()) }
 
-    val bandMod = (hrRecs.map { it.metadata.lastModifiedTime } + stepRecs.filter { it.metadata.dataOrigin.packageName == BAND_PKG }.map { it.metadata.lastModifiedTime }).maxOrNull()
+    // Doar pulsul: Mi Fitness scrie sub același pachet și pașii numărați de telefon (văzut pe 10 nov, Bluetooth oprit),
+    // deci pașii nu dovedesc că brățara s-a sincronizat.
+    val bandMod = hrRecs.maxOfOrNull { it.metadata.lastModifiedTime }
     return Input(z, now, true, bandMod != null && bandMod >= now.minusSeconds(72 * 3600), hr.lastOrNull()?.t, bandMod,
         hr, steps, sleeps, ex, resting)
 }

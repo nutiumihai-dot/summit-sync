@@ -115,6 +115,12 @@ suspend fun runDiagnostic(ctx: Context, days: Int = 14): String {
                 l("  ${d.dayOfMonth} pe ore: ${h.joinToString(",")}")
             }
         }
+        val fmtS = DateTimeFormatter.ofPattern("HH:mm:ss")
+        l("ultimele înregistrări de pași (start-end n · dispozitiv · clientId/ver · metodă · modif · id):")
+        for (r in steps.sortedBy { it.startTime }.takeLast(16)) {
+            val m = r.metadata
+            l("  ${t(r.startTime)}-${hm(r.endTime)} n=${r.count} · ${m.device?.let { "${it.manufacturer}/${it.model}/${it.type}" }} · ${m.clientRecordId}/${m.clientRecordVersion} · ${METH[m.recordingMethod]} · ${fmtS.format(m.lastModifiedTime.atZone(Z))} · ${m.id.take(8)}")
+        }
         try {
             val agg = c.aggregateGroupByPeriod(AggregateGroupByPeriodRequest(setOf(StepsRecord.COUNT_TOTAL),
                 TimeRangeFilter.between(today.minusDays((days - 1).toLong()).atStartOfDay(), now.atZone(Z).toLocalDateTime()), Period.ofDays(1)))
@@ -149,6 +155,8 @@ suspend fun runDiagnostic(ctx: Context, days: Int = 14): String {
                 val w = l2.map { it.time.atZone(Z).let { z -> z.hour * 4 + z.minute / 15 } }.toSet()
                 "${d.dayOfMonth}:${w.size}(${w.count { it in 28 until 92 }})"
             })
+            l("  ultimele înregistrări de puls (mostre · modif · clientId):")
+            for (r in g.sortedBy { it.startTime }.takeLast(6)) l("    ${t(r.startTime)}-${hm(r.endTime)} [${r.samples.joinToString(",") { hm(it.time) + "=" + it.beatsPerMinute }}] · ${DateTimeFormatter.ofPattern("HH:mm:ss").format(r.metadata.lastModifiedTime.atZone(Z))} · ${r.metadata.clientRecordId}/${r.metadata.clientRecordVersion}")
             l("  bpm min/med/max: ${s.minOfOrNull { it.beatsPerMinute }}/${if (s.isEmpty()) 0 else s.sumOf { it.beatsPerMinute } / s.size}/${s.maxOfOrNull { it.beatsPerMinute }}")
         }
     }
