@@ -110,6 +110,10 @@ class CoreTest {
         assertEquals("galben", r3.getString("verdict"))
         assertEquals("ok", r3.getJSONObject("verificari").getString("V3"))
         assertEquals("k7Q2", r3.getString("cod"))
+        assertFalse(r3.getJSONObject("zile").has("2026-11-05"))   // zi fără date: nu se scrie
+        val r4 = buildResult(full, Request(LocalDate.parse("2026-11-04"), LocalDate.parse("2026-11-10"), tinta = LocalDate.parse("2026-11-05")), "k7Q2")
+        assertEquals("galben", r4.getString("verdict"))
+        assertTrue(r4.getJSONObject("verificari").getString("V4").contains("fara_date"))
         // modul azi: purtată toată dimineața, sincronizată acum 5 min → verde
         val azi = buildResult(input("2026-11-10T09:05", hr, listOf(sleep)), Request(LocalDate.parse("2026-11-10"), LocalDate.parse("2026-11-10"), azi = true), "x")
         assertEquals("verde", azi.getString("verdict"))

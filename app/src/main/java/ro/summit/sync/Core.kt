@@ -401,8 +401,11 @@ fun buildResult(inp: Input, req: Request, cod: String): JSONObject {
         val startAt = if (req.azi && d == today) sleepFor(today, merged, z).night?.end
             ?: inp.hr.filter { it.t >= today.atStartOfDay(z).toInstant() }.minOfOrNull { it.t } else null
         val c = computeDay(d, inp, merged, cutoff, startAt)
-        c.json.put("sincronizatPana", iso(ls, z))
-        zile.put(d.toString(), c.json); status[d] = c.status
+        // zi fără nicio dată (nici pași, nici puls, nici somn, nici antrenament): nu se scrie, ca să nu pară „0 pași”
+        val empty = c.json.getJSONObject("pasi").getLong("total") == 0L && !c.json.has("puls") && !c.json.has("somn") &&
+            !c.json.has("somnZi") && c.json.getJSONArray("antrenamente").length() == 0
+        if (empty) status[d] = "fara_date"
+        else { c.json.put("sincronizatPana", iso(ls, z)); zile.put(d.toString(), c.json); status[d] = c.status }
         d = d.plusDays(1)
     }
     res.put("zile", zile)
