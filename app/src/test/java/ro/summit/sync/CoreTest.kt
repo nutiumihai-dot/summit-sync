@@ -19,7 +19,7 @@ class CoreTest {
         return out
     }
     private fun input(now: String, hr: List<Hr>, sleeps: List<Sleep> = emptyList(), steps: List<StepRec> = emptyList(), lastSync: String? = null) =
-        Input(z, at(now), true, true, lastSync?.let { at(it) } ?: hr.maxOfOrNull { it.t }, hr, steps, sleeps, emptyList(), emptyList())
+        Input(z, at(now), true, true, lastSync?.let { at(it) } ?: hr.maxOfOrNull { it.t }, hr = hr, steps = steps, sleeps = sleeps, exercises = emptyList(), resting = emptyList())
 
     @Test fun snooze_treziriSiReveniri() {
         val s = Sleep(at("2026-11-09T23:40"), at("2026-11-10T07:22"), listOf(
@@ -113,18 +113,49 @@ class CoreTest {
         // modul azi: purtată toată dimineața, sincronizată acum 5 min → verde
         val azi = buildResult(input("2026-11-10T09:05", hr, listOf(sleep)), Request(LocalDate.parse("2026-11-10"), LocalDate.parse("2026-11-10"), azi = true), "x")
         assertEquals("verde", azi.getString("verdict"))
-        // modul azi, Bluetooth oprit de 2 ore → roșu
+        // modul azi, Bluetooth oprit de 2 ore (Mi Fitness n-a mai scris) → roșu
         val stale = buildResult(input("2026-11-10T11:00", hr, listOf(sleep)), Request(LocalDate.parse("2026-11-10"), LocalDate.parse("2026-11-10"), azi = true), "x")
         assertEquals("rosu", stale.getString("verdict"))
     }
 
-    @Test fun plimbareDetectata_inAfaraAntrenamentului() {
-        val steps = (0 until 15).map { StepRec(at("2026-11-09T12:00").plusSeconds(it * 60L), at("2026-11-09T12:01").plusSeconds(it * 60L), if (it == 6) 20 else 100, true) }
-        val inp = input("2026-11-10T08:00", hrEvery("2026-11-09T00:00", "2026-11-10T00:00"), steps = steps, lastSync = "2026-11-10T07:00")
+    @Test fun plimbareDetectata_peBlocuriDe30min() {
+        val steps = listOf(
+            StepRec(at("2026-11-09T11:30"), at("2026-11-09T11:59"), 300, true),
+            StepRec(at("2026-11-09T12:00"), at("2026-11-09T12:29"), 1600, true),
+            StepRec(at("2026-11-09T12:30"), at("2026-11-09T12:59"), 1100, true),
+            StepRec(at("2026-11-09T18:00"), at("2026-11-09T18:29"), 2500, true),   // în antrenament → nu e plimbare
+        )
+        val ex = listOf(Exercise(at("2026-11-09T18:00"), at("2026-11-09T18:30"), 79, null, 2.0))
+        val inp = input("2026-11-10T08:00", hrEvery("2026-11-09T00:00", "2026-11-10T00:00", stepMin = 10), steps = steps, lastSync = "2026-11-10T07:00").copy(exercises = ex)
         val c = computeDay(LocalDate.parse("2026-11-09"), inp, emptyList(), at("2026-11-10T07:00"))
         val w = c.json.getJSONArray("plimbari")
         assertEquals(1, w.length())
         assertEquals("12:00", w.getJSONObject(0).getString("start"))
-        assertEquals(15, w.getJSONObject(0).getInt("min"))
+        assertEquals(2700, w.getJSONObject(0).getLong("pasi"))
+        assertEquals(25, w.getJSONObject(0).getInt("min"))
+        assertEquals(1, c.json.getJSONArray("antrenamente").length())
+        assertEquals("complet", c.status)   // puls la 10 min acoperă toate ferestrele de 15 min
+    }
+
+    @Test fun anomalie_pulsMareInRepaus() {
+        val hr = hrEvery("2026-11-09T07:00", "2026-11-09T22:00", stepMin = 10).map { if (it.t >= at("2026-11-09T15:00") && it.t < at("2026-11-09T15:30")) Hr(it.t, 160) else it }
+        val inp = input("2026-11-10T08:00", hr, lastSync = "2026-11-10T07:00")
+        val a = computeDay(LocalDate.parse("2026-11-09"), inp, emptyList(), at("2026-11-10T07:00")).json.getJSONArray("anomalii")
+        assertEquals(1, a.length())
+        assertEquals("puls_mare", a.getJSONObject(0).getString("tip"))
+        assertEquals("15:00", a.getJSONObject(0).getString("start"))
+        assertTrue(a.getJSONObject(0).getJSONArray("detaliu").length() > 60)
+    }
+
+    @Test fun cerereImport_listaAlbaSiZile() {
+        val today = LocalDate.parse("2026-11-10")
+        fun q(m: Map<String, String>) = parseImport({ m[it] }, today)
+        val ok = mapOf("cod" to "k7q2ab", "ret" to "https://nutiumihai-dot.github.io/summit-test/", "zile" to "2026-10-01..2026-11-12", "mod" to "azi")
+        val r = q(ok)!!
+        assertEquals(LocalDate.parse("2026-10-28"), r.req.from)   // max 14 zile
+        assertEquals(today, r.req.to)
+        assertTrue(r.req.azi)
+        assertNull(q(ok + ("ret" to "https://evil.example/")))
+        assertNull(q(ok + ("cod" to "AB!")))
     }
 }

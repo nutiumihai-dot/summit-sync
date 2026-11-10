@@ -27,6 +27,7 @@ data class Input(
     val permsOk: Boolean,
     val bandRecent: Boolean,          // V1: date de la brățară în ultimele 72 h
     val lastSync: Instant?,           // ora celei mai recente mostre de puls de la brățară
+    val lastWrite: Instant? = lastSync, // când a scris Mi Fitness ultima dată în Health Connect
     val hr: List<Hr>,                 // doar brățara
     val steps: List<StepRec>,
     val sleeps: List<Sleep>,
@@ -48,9 +49,8 @@ object P {
     var MERGE_GAP_MIN = 60L           // sesiuni de somn unite
     var NIGHT_MIN_H = 3L              // sub 3 h = somn de zi
     var HR_MAX = 184
-    var WALK_SPM = 80L
-    var WALK_MIN = 10L
-    var WALK_GAP = 2L
+    var WALK_BUCKET = 1000L           // pași într-un bloc de 30 min (Mi Fitness scrie pașii pe 30 min)
+    var WALK_SPM_EST = 105L           // pași/min pentru durata estimată
     var AZI_FRESH_MIN = 30L           // modul azi: ultima sincronizare cel mult acum 30 min
 }
 
@@ -148,7 +148,7 @@ data class DayCalc(val json: JSONObject, val status: String, val purtat: Int)
 fun dayBounds(d: LocalDate, z: ZoneId): Pair<Instant, Instant> = d.atStartOfDay(z).toInstant() to d.plusDays(1).atStartOfDay(z).toInstant()
 
 /** Calculează o zi întreagă. cutoff = până unde avem date sigure (ultima sincronizare sau acum). */
-fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant): DayCalc {
+fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant, startAt: Instant? = null): DayCalc {
     val z = inp.zone
     val (d0, d1) = dayBounds(d, z)
     val end = minOf(d1, cutoff)
@@ -167,7 +167,7 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant): 
     while (t < d1) {
         val mid = t.plus(w.dividedBy(2))
         val hourIdx = Duration.between(d0, t).toHours().toInt()
-        val past = t.plus(w) <= end
+        val past = t.plus(w) <= end && (startAt == null || t >= startAt)
         val sl = inSleep(mid)
         val cov = idx in covered
         if (past && !sl) { awakeW++; if (cov) wornW++ }
@@ -231,9 +231,9 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant): 
 
     // ---- minute (pași + puls) pentru plimbări și anomalii
     val minute = minuteSteps(inp.steps, d0, d1)
-    o.put("plimbari", JSONArray(walks(minute, d0, inp, ex).map { (a, b) ->
+    o.put("plimbari", JSONArray(walks(inp.steps.filter { it.band && it.start >= d0 && it.start < d1 }, ex).map { (a, b, n) ->
         val s = inp.hr.filter { it.t >= a && it.t < b }
-        JSONObject().put("start", hm(a, z)).put("min", mins(a, b)).put("pasi", stepsBetween(minute, d0, a, b))
+        JSONObject().put("start", hm(a, z)).put("min", (n / P.WALK_SPM_EST).toInt()).put("pasi", n).put("est", true)
             .also { if (s.isNotEmpty()) it.put("pulsMediu", s.sumOf { x -> x.bpm } / s.size) }
     }))
     o.put("anomalii", JSONArray(anomalies(inp, minute, d0, d1, ex, z)))
@@ -288,41 +288,36 @@ fun stepsBetween(m: LongArray, d0: Instant, a: Instant, b: Instant): Long {
     return (i0 until i1).sumOf { m[it] }
 }
 
-/** Plimbări: min. 10 min la peste 80 pași/min, pauze sub 2 min, în afara antrenamentelor înregistrate. */
-fun walks(m: LongArray, d0: Instant, inp: Input, ex: List<Exercise>): List<Pair<Instant, Instant>> {
-    val out = mutableListOf<Pair<Instant, Instant>>()
-    var start = -1; var lastGood = -1
-    fun close() {
-        if (start >= 0 && lastGood - start + 1 >= P.WALK_MIN) {
-            val a = d0.plusSeconds(start * 60L); val b = d0.plusSeconds((lastGood + 1) * 60L)
-            if (ex.none { overlap(it.start, it.end, a, b) > 0 }) out += a to b
-        }
-        start = -1
+/** Plimbări: blocuri de pași ale brățării cu ≥1000 pași / 30 min, unite dacă sunt alăturate, în afara antrenamentelor.
+ *  Mi Fitness scrie pașii pe 30 min, deci durata e estimată din pași (≈105 pași/min). */
+fun walks(band: List<StepRec>, ex: List<Exercise>): List<Triple<Instant, Instant, Long>> {
+    val out = mutableListOf<Triple<Instant, Instant, Long>>()
+    var cur: Triple<Instant, Instant, Long>? = null
+    for (r in band.sortedBy { it.start }) {
+        val big = r.count >= P.WALK_BUCKET && ex.none { overlap(it.start, it.end, r.start, r.end) > 0 }
+        if (!big) { cur?.let { out += it }; cur = null; continue }
+        cur = if (cur != null && mins(cur.second, r.start) <= 1) Triple(cur.first, r.end, cur.third + r.count) else { cur?.let { out += it }; Triple(r.start, r.end, r.count) }
     }
-    for (k in m.indices) {
-        if (m[k] >= P.WALK_SPM) { if (start < 0) start = k; lastGood = k }
-        else if (start >= 0 && k - lastGood > P.WALK_GAP) close()
-    }
-    close()
+    cur?.let { out += it }
     return out
 }
 
 /** Anomalii: puls ≥ 150 ≥3 min în afara antrenamentelor; puls < 38 treaz ≥3 min; peste 220 pași/min. Max 3 pe zi, cu detaliu pe minut ±30 min. */
 fun anomalies(inp: Input, m: LongArray, d0: Instant, d1: Instant, ex: List<Exercise>, z: ZoneId): List<JSONObject> {
-    val perMin = HashMap<Int, MutableList<Int>>()
-    inp.hr.filter { it.t >= d0 && it.t < d1 }.forEach { perMin.getOrPut(mins(d0, it.t).toInt()) { mutableListOf() } += it.bpm }
-    val avg = perMin.mapValues { it.value.average().roundToInt() }
+    val hs = inp.hr.filter { it.t >= d0 && it.t < d1 }.sortedBy { it.t }
     val found = mutableListOf<Triple<String, Int, Int>>()
-    fun scan(tip: String, f: (Int) -> Boolean) {
-        var s = -1; var last = -1
-        for (k in avg.keys.sorted()) {
-            if (f(k)) { if (s < 0 || k - last > 2) { if (s >= 0 && last - s >= 2) found += Triple(tip, s, last); s = k }; last = k }
+    fun outsideEx(t: Instant) = ex.none { t >= it.start && t <= it.end }
+    // ≥2 mostre consecutive (pauză ≤ 15 min) care îndeplinesc condiția
+    fun scan(tip: String, f: (Hr) -> Boolean) {
+        var run = mutableListOf<Hr>()
+        fun close() { if (run.size >= 2) found += Triple(tip, mins(d0, run.first().t).toInt(), mins(d0, run.last().t).toInt()); run = mutableListOf() }
+        for (h in hs) {
+            if (f(h)) { if (run.isNotEmpty() && mins(run.last().t, h.t) > 15) close(); run += h } else close()
         }
-        if (s >= 0 && last - s >= 2) found += Triple(tip, s, last)
+        close()
     }
-    fun outsideEx(k: Int) = d0.plusSeconds(k * 60L).let { t -> ex.none { t >= it.start && t <= it.end } }
-    scan("puls_mare") { k -> avg[k]!! >= 150 && outsideEx(k) }
-    scan("puls_mic") { k -> avg[k]!! < 38 }
+    scan("puls_mare") { it.bpm >= 150 && outsideEx(it.t) }
+    scan("puls_mic") { it.bpm < 38 }
     for (k in m.indices) if (m[k] > 220 && found.none { it.first == "pasi_mari" && k - it.third <= 2 }) found += Triple("pasi_mari", k, k)
     return found.take(3).map { (tip, a, b) ->
         JSONObject().put("tip", tip).put("start", hm(d0.plusSeconds(a * 60L), z)).put("min", b - a + 1)
@@ -363,7 +358,8 @@ fun buildResult(inp: Input, req: Request, cod: String): JSONObject {
     checks.put("V1", "ok")
     val ls = inp.lastSync
     res.put("sincronizatPana", iso(ls, z))
-    val v2ok = if (req.azi) mins(ls, inp.now) <= P.AZI_FRESH_MIN else ls >= today.atStartOfDay(z).toInstant()
+    // modul azi: Mi Fitness a scris în ultimele 30 min (Bluetooth pornit); altfel ultima mostră e de azi
+    val v2ok = if (req.azi) inp.lastWrite != null && mins(inp.lastWrite, inp.now) <= P.AZI_FRESH_MIN else ls >= today.atStartOfDay(z).toInstant()
     if (!v2ok && !req.scos) {
         q.put(JSONObject().put("id", "V2").put("text", "Ultimele date de la brățară: ${if (ls.atZone(z).toLocalDate() == today) "azi" else ls.atZone(z).toLocalDate().toString()} ${hm(ls, z)}. Sincronizează brățara în Mi Fitness sau spune că ai scos-o atunci.")
             .put("butoane", JSONArray().put("reincearca").put("scos")))
@@ -377,7 +373,10 @@ fun buildResult(inp: Input, req: Request, cod: String): JSONObject {
     val status = HashMap<LocalDate, String>()
     var d = req.from
     while (!d.isAfter(req.to)) {
-        val c = computeDay(d, inp, merged, cutoff)
+        // modul azi: purtarea se socotește de la trezire (sau de la prima mostră de azi)
+        val startAt = if (req.azi && d == today) sleepFor(today, merged, z).night?.end
+            ?: inp.hr.filter { it.t >= today.atStartOfDay(z).toInstant() }.minOfOrNull { it.t } else null
+        val c = computeDay(d, inp, merged, cutoff, startAt)
         c.json.put("sincronizatPana", iso(ls, z))
         zile.put(d.toString(), c.json); status[d] = c.status
         d = d.plusDays(1)
