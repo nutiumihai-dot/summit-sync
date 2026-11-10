@@ -180,6 +180,7 @@ class CoreTest {
         val w = computeDay(LocalDate.parse("2026-11-09"), inp, emptyList(), at("2026-11-10T07:00")).json.getJSONArray("plimbari")
         assertEquals(1, w.length())
         assertEquals(12, w.getJSONObject(0).getInt("min"))
+        assertEquals(1200, w.getJSONObject(0).getLong("pasi"))
         assertFalse(w.getJSONObject(0).has("est"))
     }
 }

@@ -232,9 +232,10 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant, s
     // ---- minute (pași + puls) pentru plimbări și anomalii
     val minute = minuteSteps(inp.steps, d0, d1)
     // plimbări: pe minut din pedometrul telefonului (când telefonul a fost la el); altfel din blocurile Mi Fitness de 30 min
-    val exact = walksMinute(minuteSteps(inp.steps.filter { !it.band }, d0, d1), d0, ex)
+    val phoneMin = minuteSteps(inp.steps.filter { !it.band }, d0, d1)
+    val exact = walksMinute(phoneMin, d0, ex)
     val est = walks(inp.steps.filter { it.band && it.start >= d0 && it.start < d1 }, ex).filter { (a, b, _) -> exact.none { overlap(it.first, it.second, a, b) > 0 } }
-    val wl = exact.map { (a, b) -> Triple(a, b, stepsBetween(minute, d0, a, b)) to false } + est.map { it to true }
+    val wl = exact.map { (a, b) -> Triple(a, b, stepsBetween(phoneMin, d0, a, b)) to false } + est.map { it to true }
     o.put("plimbari", JSONArray(wl.sortedBy { it.first.first }.map { (w, isEst) ->
         val (a, b, n) = w
         val s = inp.hr.filter { it.t >= a && it.t < b }
