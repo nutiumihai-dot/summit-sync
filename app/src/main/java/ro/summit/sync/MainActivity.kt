@@ -77,7 +77,12 @@ class MainActivity : ComponentActivity() {
         out.text = "Citesc din Health Connect…"
         lifecycleScope.launch {
             val json = try {
-                buildResult(loadInput(this@MainActivity, r.req), r.req, r.cod).toString()
+                buildResult(loadInput(this@MainActivity, r.req), r.req, r.cod).also { res ->
+                    // următoarea alarmă din telefon (fără permisiuni): propunere pentru „prima alarmă” în card
+                    getSystemService(android.app.AlarmManager::class.java)?.nextAlarmClock?.let { a ->
+                        res.put("alarma", hm(java.time.Instant.ofEpochMilli(a.triggerTime), java.time.ZoneId.systemDefault()))
+                    }
+                }.toString()
             } catch (e: Exception) {
                 org.json.JSONObject().put("v", 1).put("cod", r.cod).put("verdict", "rosu")
                     .put("verificari", org.json.JSONObject().put("V0", "Eroare la citire: ${e.javaClass.simpleName} ${e.message}"))

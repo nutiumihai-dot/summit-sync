@@ -187,4 +187,15 @@ class CoreTest {
         assertEquals(1200, w.getJSONObject(0).getLong("pasi"))
         assertFalse(w.getJSONObject(0).has("est"))
     }
+
+    @Test fun somnFaraFazeTreaz_caPe11Nov() {
+        val s = Sleep(at("2026-11-11T00:24"), at("2026-11-11T09:13"), listOf(
+            st("2026-11-11T00:24", "2026-11-11T03:00", 4), st("2026-11-11T03:00", "2026-11-11T05:34", 5),
+            st("2026-11-11T05:34", "2026-11-11T07:51", 6), st("2026-11-11T07:51", "2026-11-11T09:13", 4)))
+        val j = sleepSummary(s, z)
+        assertEquals(529, j.getInt("min"))
+        assertFalse(j.has("snoozeMin"))      // necunoscut, nu 0
+        assertEquals(0, j.getInt("treziri"))
+        assertTrue(j.getInt("scor") in 1..100)
+    }
 }

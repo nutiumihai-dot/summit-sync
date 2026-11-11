@@ -115,15 +115,17 @@ fun sleepSummary(s: Sleep, z: ZoneId, prevBeds: List<Int> = emptyList()): JSONOb
         if (fi >= 0) for (i in fi..li) if (isAwake(st[i]) && (i == 0 || !isAwake(st[i - 1]))) treziri++
         // snooze: prima trezire din ultima oră înainte de ridicare
         val hourStart = s.end.minusSeconds(3600)
-        val firstWake = st.firstOrNull { isAwake(it) && it.end > hourStart && it.start < s.end && (it.start >= hourStart || it.end > hourStart) }
-        val wakeAt = firstWake?.let { maxOf(it.start, hourStart) } ?: lastSleep?.end ?: s.end
-        val reveniri = st.count { !isAwake(it) && it.start >= wakeAt }
-        o.put("primaTrezire", hm(wakeAt, z)).put("snoozeMin", mins(wakeAt, s.end)).put("reveniri", reveniri)
+        // Mi Fitness nu trimite mereu fazele „treaz” (11 nov: niciuna); fără ele snooze-ul nu se poate deduce → vine din alarmă, în aplicație
+        val firstWake = st.firstOrNull { isAwake(it) && it.end > hourStart && it.start < s.end }
+        if (firstWake != null) {
+            val wakeAt = maxOf(firstWake.start, hourStart)
+            o.put("primaTrezire", hm(wakeAt, z)).put("snoozeMin", mins(wakeAt, s.end)).put("reveniri", st.count { !isAwake(it) && it.start >= wakeAt })
+        }
         val deep = sum { it.type == DEEP }; val rem = sum { it.type == REM }
         val light = sum { it.type == LIGHT || it.type == 2 || it.type == 0 }
         o.put("profund", deep).put("rem", rem).put("usor", light).put("treaz", awake).put("treziri", treziri)
         // eficiență 20, profund+REM 20, treziri 10
-        if (total > 0) { score += 20 * clamp((asleep.toDouble() / total - 0.75) / 0.2); maxScore += 20 }
+        if (total > 0 && awake > 0) { score += 20 * clamp((asleep.toDouble() / total - 0.75) / 0.2); maxScore += 20 }
         if (asleep > 0 && (deep + rem) > 0) { score += 20 * clamp((deep + rem).toDouble() / asleep / 0.4); maxScore += 20 }
         score += 10 * clamp(1 - (treziri - 1).coerceAtLeast(0) / 5.0); maxScore += 10
     }
