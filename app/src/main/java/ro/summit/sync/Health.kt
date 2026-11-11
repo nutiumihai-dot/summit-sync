@@ -73,7 +73,7 @@ suspend fun loadInput(ctx: Context, req: Request): Input {
     // deci pașii nu dovedesc că brățara s-a sincronizat.
     val bandMod = hrRecs.maxOfOrNull { it.metadata.lastModifiedTime }
     return Input(z, now, true, bandMod != null && bandMod >= now.minusSeconds(72 * 3600), hr.lastOrNull()?.t, bandMod,
-        hr, steps, sleeps, ex, resting)
+        hr, steps, sleeps, ex, resting, readAlarmLog(ctx))
 }
 
 /** JSON → deflate (fără antet) → base64url fără padding, pentru fragmentul #hc=. */

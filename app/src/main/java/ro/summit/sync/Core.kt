@@ -20,6 +20,24 @@ data class Stage(val start: Instant, val end: Instant, val type: Int)
 data class Sleep(val start: Instant, val end: Instant, val stages: List<Stage> = emptyList())
 data class Exercise(val start: Instant, val end: Instant, val type: Int, val title: String?, val km: Double?)
 data class Resting(val t: Instant, val bpm: Int)
+/** O linie din jurnalul alarmelor: la momentul t, următoarea alarmă programată era `next`. */
+data class AlarmEv(val t: Instant, val next: Instant?)
+data class NightAlarms(val first: Instant, val rings: Int, val stopped: Instant?)
+
+/** Alarmele care au sunat între from și to: o alarmă „a sunat” când ora ei a trecut și Android a anunțat o nouă alarmă următoare.
+ *  rings = de câte ori a sunat (1 + snooze-uri); stopped = când n-a mai urmat nicio alarmă în următoarele 45 min. */
+fun nightAlarms(ev: List<AlarmEv>, from: Instant, to: Instant): NightAlarms? {
+    val e = ev.sortedBy { it.t }
+    val rings = sortedSetOf<Instant>()
+    for (i in 1 until e.size) {
+        val prev = e[i - 1].next ?: continue
+        if (prev <= e[i].t.plusSeconds(60) && prev >= from && prev <= to) rings += prev
+    }
+    if (rings.isEmpty()) return null
+    val last = rings.last()
+    val stopped = e.firstOrNull { it.t >= last.minusSeconds(60) && (it.next == null || it.next > it.t.plusSeconds(45 * 60)) }?.t
+    return NightAlarms(rings.first(), rings.size, stopped)
+}
 
 data class Input(
     val zone: ZoneId,
@@ -33,6 +51,7 @@ data class Input(
     val sleeps: List<Sleep>,
     val exercises: List<Exercise>,
     val resting: List<Resting>,
+    val alarms: List<AlarmEv> = emptyList(),
 )
 
 data class Request(
@@ -205,7 +224,15 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant, s
     val ds = sleepFor(d, merged, z)
     if (ds.night != null) {
         val prev = (1..7).mapNotNull { k -> sleepFor(d.minusDays(k.toLong()), merged, z).night?.let { bedMinutes(it.start, z) } }
-        o.put("somn", sleepSummary(ds.night, z, prev).put("status", "ok"))
+        val sj = sleepSummary(ds.night, z, prev).put("status", "ok")
+        // alarmele din telefon din fereastra nopții (alarmele de zi nu intră): prima alarmă, de câte ori a sunat, snooze = ridicare − prima alarmă
+        nightAlarms(inp.alarms, ds.night.start, ds.night.end.plusSeconds(30 * 60))?.let { a ->
+            sj.put("alarma", hm(a.first, z)).put("alarmeSunat", a.rings)
+            a.stopped?.let { sj.put("alarmaOprita", hm(it, z)) }
+            val sn = mins(a.first, ds.night.end)
+            if (sn in 0..180) sj.put("snoozeMin", sn).put("snoozeSursa", "alarme") else sj.remove("snoozeMin")
+        }
+        o.put("somn", sj)
     }
     if (ds.naps.isNotEmpty()) o.put("somnZi", JSONArray(ds.naps.map { JSONObject().put("start", hm(it.start, z)).put("min", mins(it.start, it.end)) }))
 

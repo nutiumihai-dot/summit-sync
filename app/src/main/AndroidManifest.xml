@@ -17,6 +17,8 @@
     <uses-permission android:name="android.permission.health.READ_FLOORS_CLIMBED" />
     <uses-permission android:name="android.permission.health.READ_ELEVATION_GAINED" />
 
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
         <package android:name="com.google.android.healthconnect.controller" />
@@ -46,6 +48,16 @@
                 <data android:scheme="summitsync" />
             </intent-filter>
         </activity>
+
+        <!-- Jurnalul alarmelor: Android anunță fiecare schimbare a următoarei alarme (sună, snooze, oprită). -->
+        <receiver
+            android:name=".AlarmReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.app.action.NEXT_ALARM_CLOCK_CHANGED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Health Connect arată ecranul de permisiuni doar dacă aplicația are o pagină de confidențialitate. -->
         <activity

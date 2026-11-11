@@ -49,10 +49,12 @@ class MainActivity : ComponentActivity() {
         row2.addView(btn("Pași: instantaneu") { snap() })
         row2.addView(btn("Pași: raport") { report = stepReport(this); out.text = report })
         row2.addView(btn("Pași: șterge") { stepReset(this); out.text = "Instantaneele au fost șterse." })
+        row2.addView(btn("Alarme") { report = alarmLogText(this); out.text = report })
         root.addView(row2)
         out = TextView(this).apply { typeface = Typeface.MONOSPACE; textSize = 11f; setTextIsSelectable(true) }
         root.addView(ScrollView(this).apply { addView(out) }, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
+        runCatching { logNextAlarm(this, "deschis") }
         if (HealthConnectClient.getSdkStatus(this) != HealthConnectClient.SDK_AVAILABLE) { out.text = "Health Connect nu e disponibil pe acest telefon."; return }
         if (!handle(intent)) out.text = "Deschide Summit Sync din Summit Building (butonul de pe Azi), sau apasă Diagnostic."
     }

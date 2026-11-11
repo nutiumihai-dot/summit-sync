@@ -198,4 +198,27 @@ class CoreTest {
         assertEquals(0, j.getInt("treziri"))
         assertTrue(j.getInt("scor") in 1..100)
     }
+
+    @Test fun alarme_primaSnoozeuriOprita_faraAlarmeleDeZi() {
+        val tm = at("2026-11-13T07:30")
+        val ev = listOf(
+            AlarmEv(at("2026-11-11T22:00"), at("2026-11-12T07:30")),
+            AlarmEv(at("2026-11-12T07:30").plusSeconds(4), tm),            // a sunat, ceasul a mutat-o pe mâine
+            AlarmEv(at("2026-11-12T07:31"), at("2026-11-12T07:41")),       // snooze
+            AlarmEv(at("2026-11-12T07:41").plusSeconds(3), tm),
+            AlarmEv(at("2026-11-12T07:42"), at("2026-11-12T07:52")),       // snooze
+            AlarmEv(at("2026-11-12T07:52").plusSeconds(10), tm),           // oprită
+            AlarmEv(at("2026-11-12T13:00"), at("2026-11-12T14:00")),       // alarmă de zi
+            AlarmEv(at("2026-11-12T14:00").plusSeconds(5), tm),
+        )
+        val night = Sleep(at("2026-11-11T23:50"), at("2026-11-12T08:10"))
+        val inp = input("2026-11-12T09:00", hrEvery("2026-11-11T20:00", "2026-11-12T09:00", stepMin = 10), listOf(night)).copy(alarms = ev)
+        val s = computeDay(LocalDate.parse("2026-11-12"), inp, mergeSleeps(inp.sleeps), at("2026-11-12T08:55")).json.getJSONObject("somn")
+        assertEquals("07:30", s.getString("alarma"))
+        assertEquals(3, s.getInt("alarmeSunat"))
+        assertEquals("07:52", s.getString("alarmaOprita"))
+        assertEquals(40, s.getInt("snoozeMin"))
+        // alarmă ștearsă înainte să sune: nu contează
+        assertNull(nightAlarms(listOf(AlarmEv(at("2026-11-12T06:00"), at("2026-11-12T07:30")), AlarmEv(at("2026-11-12T06:10"), tm)), night.start, night.end))
+    }
 }
