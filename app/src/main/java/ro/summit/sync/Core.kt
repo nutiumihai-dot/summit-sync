@@ -44,7 +44,7 @@ data class Input(
     val now: Instant,
     val permsOk: Boolean,
     val bandRecent: Boolean,          // V1: date de la brățară în ultimele 72 h
-    val lastSync: Instant?,           // ora celei mai recente mostre de puls de la brățară
+    val lastSync: Instant?,           // ora celei mai recente mostre de la brățară (puls sau SpO2)
     val lastWrite: Instant? = lastSync, // când a scris Mi Fitness ultima dată în Health Connect
     val hr: List<Hr>,                 // doar brățara
     val steps: List<StepRec>,
@@ -52,6 +52,7 @@ data class Input(
     val exercises: List<Exercise>,
     val resting: List<Resting>,
     val alarms: List<AlarmEv> = emptyList(),
+    val spo2: List<Instant> = emptyList(), // doar brățara: dovadă de purtare când lipsește pulsul
 )
 
 data class Request(
@@ -71,6 +72,7 @@ object P {
     var WALK_BUCKET = 1000L           // pași într-un bloc de 30 min (Mi Fitness scrie pașii pe 30 min)
     var WALK_SPM_EST = 105L           // pași/min pentru durata estimată
     var AZI_FRESH_MIN = 30L           // modul azi: ultima sincronizare cel mult acum 30 min
+    var HR_GAP_MIN = 120L             // pulsul rămas în urmă cu peste 2 h față de restul datelor = lipsește
 }
 
 private val AWAKE = setOf(1, 3, 7)
@@ -180,9 +182,12 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant, s
     // ---- purtare, pe ferestre de 15 min (ziua întreagă, orele treze, până la cutoff)
     val w = Duration.ofMinutes(P.WIN_MIN)
     val hrDay = inp.hr.filter { it.t >= d0 && it.t < d1 }.sortedBy { it.t }
-    val covered = HashSet<Long>()
-    hrDay.forEach { covered += Duration.between(d0, it.t).toMinutes() / P.WIN_MIN }
-    var awakeW = 0; var wornW = 0
+    // purtată = puls sau SpO2 în fereastră (SpO2 vine doar de la brățară și ține locul pulsului când Mi Fitness nu-l trimite)
+    val hrCov = HashSet<Long>()
+    hrDay.forEach { hrCov += Duration.between(d0, it.t).toMinutes() / P.WIN_MIN }
+    val covered = HashSet<Long>(hrCov)
+    inp.spo2.filter { it >= d0 && it < d1 }.forEach { covered += Duration.between(d0, it).toMinutes() / P.WIN_MIN }
+    var awakeW = 0; var wornW = 0; var wornHr = 0
     val wornHourKey = HashMap<Int, Boolean>() // index oră locală (0..24) → toate ferestrele purtate
     var t = d0; var idx = 0L
     while (t < d1) {
@@ -191,7 +196,7 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant, s
         val past = t.plus(w) <= end && (startAt == null || t >= startAt)
         val sl = inSleep(mid)
         val cov = idx in covered
-        if (past && !sl) { awakeW++; if (cov) wornW++ }
+        if (past && !sl) { awakeW++; if (cov) wornW++; if (idx in hrCov) wornHr++ }
         val ok = past && (cov || (sl && sleepsToday.isNotEmpty()))
         wornHourKey[hourIdx] = (wornHourKey[hourIdx] ?: true) && ok
         t = t.plus(w); idx++
@@ -199,6 +204,8 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant, s
     val purtat = if (awakeW == 0) 0 else (wornW * 100.0 / awakeW).roundToInt()
     val status = when { purtat >= 90 -> "complet"; purtat >= 30 -> "partial"; else -> "nepurtat" }
     o.put("status", status).put("purtat", purtat).put("tz", d0.atZone(z).offset.id)
+    // purtată (după SpO2), dar cu puls în mai puțin de jumătate din ferestre: pulsul lipsește, restul rămâne valabil
+    if (wornW >= 4 && wornHr * 2 < wornW) o.put("lipsa", JSONArray().put("puls"))
 
     // ---- pași pe ore: oră purtată integral → brățara, altfel max(brățară, telefon)
     val hours = Duration.between(d0, d1).toHours().toInt()
@@ -463,7 +470,18 @@ fun buildResult(inp: Input, req: Request, cod: String): JSONObject {
     val tinta = req.tinta ?: if (req.azi) today else today.minusDays(1)
     val st = status[tinta]
     checks.put("V4", "$tinta: ${st ?: "în afara cererii"}")
-    val verdict = if ((st == null || st == "complet") && (v3 == "ok" || v3 == "nu se aplică")) "verde" else "galben"
+    // V5: pulsul continuu. Brățara trimite restul (SpO2, somn, pași), dar Mi Fitness poate să nu mai scrie pulsul.
+    val lastHr = inp.hr.maxOfOrNull { it.t }
+    val hrMissing = lastHr == null || mins(lastHr, ls) > P.HR_GAP_MIN
+    val avert = JSONArray()
+    if (hrMissing) {
+        checks.put("V5", "fără puls ${lastHr?.let { "după ${iso(it, z)}" } ?: "în ultimele 72 h"}")
+        avert.put("Lipsește pulsul de la brățară${lastHr?.let { " după ${it.atZone(z).toLocalDate().let { d -> if (d == today) "azi" else if (d == today.minusDays(1)) "ieri" else d.toString() }} ${hm(it, z)}" } ?: ""}. " +
+            "Am păstrat pașii, somnul, SpO2 și antrenamentele; lipsesc pulsul de repaus, plimbările și zonele. " +
+            "Verifică în Mi Fitness monitorizarea pulsului și legătura cu Health Connect.")
+    } else checks.put("V5", "ok")
+    res.put("avertismente", avert)
+    val verdict = if (!hrMissing && (st == null || st == "complet") && (v3 == "ok" || v3 == "nu se aplică")) "verde" else "galben"
     res.put("tinta", tinta.toString())
     if (req.det.isNotEmpty()) res.put("detalii", JSONArray(req.det.map { (a, b) -> JSONObject().put("start", iso(a, z)).put("end", iso(b, z)).put("minute", detail(inp, a, b, z)) }))
     return res.put("verdict", verdict).put("verificari", checks).put("intrebari", q)

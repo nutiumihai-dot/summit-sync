@@ -122,6 +122,33 @@ class CoreTest {
         assertEquals("rosu", stale.getString("verdict"))
     }
 
+    @Test fun farăPuls_cuSpO2_importăCuAvertisment() {
+        // ca pe 11–12 nov: pulsul continuu se oprește pe 11 la 10:30, SpO2 și somnul continuă
+        val hr = hrEvery("2026-11-10T07:00", "2026-11-11T10:30")
+        val spo2 = mutableListOf<Instant>(); var t = at("2026-11-10T07:00")
+        while (t < at("2026-11-12T10:41")) { spo2 += t; t = t.plusSeconds(600) }
+        val sleep = Sleep(at("2026-11-11T23:30"), at("2026-11-12T08:30"))
+        val steps = listOf(StepRec(at("2026-11-11T17:00"), at("2026-11-11T17:30"), 900, band = true))
+        val inp = Input(z, at("2026-11-12T10:45"), true, true, spo2.last(), hr = hr, steps = steps, sleeps = listOf(sleep),
+            exercises = emptyList(), resting = emptyList(), spo2 = spo2)
+        val r = buildResult(inp, Request(LocalDate.parse("2026-11-10"), LocalDate.parse("2026-11-12")), "k7q2")
+        assertEquals("galben", r.getString("verdict"))
+        assertEquals(1, r.getJSONArray("avertismente").length())
+        assertTrue(r.getJSONObject("verificari").getString("V5").startsWith("fără puls"))
+        assertEquals("ok", r.getJSONObject("verificari").getString("V2"))
+        val d11 = r.getJSONObject("zile").getJSONObject("2026-11-11")
+        assertEquals("complet", d11.getString("status"))          // purtată după SpO2
+        assertEquals("puls", d11.getJSONArray("lipsa").getString(0))
+        assertEquals(900, d11.getJSONObject("pasi").getLong("bratara"))
+        val d10 = r.getJSONObject("zile").getJSONObject("2026-11-10")
+        assertFalse(d10.has("lipsa"))
+        assertEquals("ok", r.getJSONObject("zile").getJSONObject("2026-11-12").getJSONObject("somn").getString("status"))
+        // cu puls complet → fără avertisment
+        val ok = buildResult(input("2026-11-10T09:30", hrEvery("2026-11-09T07:00", "2026-11-10T09:00")), Request(LocalDate.parse("2026-11-09"), LocalDate.parse("2026-11-10")), "x")
+        assertEquals(0, ok.getJSONArray("avertismente").length())
+        assertEquals("ok", ok.getJSONObject("verificari").getString("V5"))
+    }
+
     @Test fun plimbareDetectata_peBlocuriDe30min() {
         val steps = listOf(
             StepRec(at("2026-11-09T11:30"), at("2026-11-09T11:59"), 300, true),

@@ -69,11 +69,18 @@ suspend fun loadInput(ctx: Context, req: Request): Input {
     val resting = readAll(c, RestingHeartRateRecord::class, dayStart, now).filterIsInstance<RestingHeartRateRecord>()
         .filter { it.metadata.dataOrigin.packageName == BAND_PKG }.map { Resting(it.time, it.beatsPerMinute.toInt()) }
 
-    // Doar pulsul: Mi Fitness scrie sub același pachet și pașii numărați de telefon (văzut pe 10 nov, Bluetooth oprit),
+    // SpO2: doar de la brățară (la ~10 min). Ține loc de dovadă când Mi Fitness nu trimite pulsul (văzut pe 11–12 nov).
+    val spo2Recs = if (HealthPermission.getReadPermission(OxygenSaturationRecord::class) in granted)
+        readAll(c, OxygenSaturationRecord::class, hrFrom, now).filterIsInstance<OxygenSaturationRecord>().filter { it.metadata.dataOrigin.packageName == BAND_PKG }
+    else emptyList()
+    val spo2 = spo2Recs.map { it.time }.distinct().sorted()
+
+    // Puls sau SpO2: Mi Fitness scrie sub același pachet și pașii numărați de telefon (văzut pe 10 nov, Bluetooth oprit),
     // deci pașii nu dovedesc că brățara s-a sincronizat.
-    val bandMod = hrRecs.maxOfOrNull { it.metadata.lastModifiedTime }
-    return Input(z, now, true, bandMod != null && bandMod >= now.minusSeconds(72 * 3600), hr.lastOrNull()?.t, bandMod,
-        hr, steps, sleeps, ex, resting, readAlarmLog(ctx))
+    val bandMod = listOfNotNull(hrRecs.maxOfOrNull { it.metadata.lastModifiedTime }, spo2Recs.maxOfOrNull { it.metadata.lastModifiedTime }).maxOrNull()
+    val lastSync = listOfNotNull(hr.lastOrNull()?.t, spo2.lastOrNull()).maxOrNull()
+    return Input(z, now, true, bandMod != null && bandMod >= now.minusSeconds(72 * 3600), lastSync, bandMod,
+        hr, steps, sleeps, ex, resting, readAlarmLog(ctx), spo2)
 }
 
 /** JSON → deflate (fără antet) → base64url fără padding, pentru fragmentul #hc=. */
