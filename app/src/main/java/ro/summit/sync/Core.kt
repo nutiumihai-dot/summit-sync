@@ -20,6 +20,7 @@ data class Stage(val start: Instant, val end: Instant, val type: Int)
 data class Sleep(val start: Instant, val end: Instant, val stages: List<Stage> = emptyList())
 data class Exercise(val start: Instant, val end: Instant, val type: Int, val title: String?, val km: Double?)
 data class Resting(val t: Instant, val bpm: Int)
+data class Spo2(val t: Instant, val pct: Int)
 /** O linie din jurnalul alarmelor: la momentul t, următoarea alarmă programată era `next`. */
 data class AlarmEv(val t: Instant, val next: Instant?)
 data class NightAlarms(val first: Instant, val rings: Int, val stopped: Instant?)
@@ -53,6 +54,7 @@ data class Input(
     val resting: List<Resting>,
     val alarms: List<AlarmEv> = emptyList(),
     val spo2: List<Instant> = emptyList(), // doar brățara: dovadă de purtare când lipsește pulsul
+    val spo2Pct: List<Spo2> = emptyList(), // doar brățara, cu valoare (pentru detaliu); gol dacă SpO2 nu e permis
 )
 
 data class Request(
@@ -166,7 +168,8 @@ fun sleepSummary(s: Sleep, z: ZoneId, prevBeds: List<Int> = emptyList()): JSONOb
 fun bedMinutes(i: Instant, z: ZoneId): Int { val t = i.atZone(z); return ((t.hour + 12) % 24) * 60 + t.minute }
 private fun clamp(x: Double) = x.coerceIn(0.0, 1.0)
 
-data class DayCalc(val json: JSONObject, val status: String, val purtat: Int)
+/** det = seriile zilei pentru `detaliu` (vezi README); cheile fără date lipsesc. */
+data class DayCalc(val json: JSONObject, val status: String, val purtat: Int, val det: JSONObject = JSONObject())
 
 fun dayBounds(d: LocalDate, z: ZoneId): Pair<Instant, Instant> = d.atStartOfDay(z).toInstant() to d.plusDays(1).atStartOfDay(z).toInstant()
 
@@ -208,24 +211,22 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant, s
     if (wornW >= 4 && wornHr * 2 < wornW) o.put("lipsa", JSONArray().put("puls"))
 
     // ---- pași pe ore: oră purtată integral → brățara, altfel max(brățară, telefon)
-    val hours = Duration.between(d0, d1).toHours().toInt()
-    val band = LongArray(hours); val phone = LongArray(hours)
-    for (r in inp.steps) {
-        if (r.end <= d0 || r.start >= d1) continue
-        val dur = Duration.between(r.start, r.end).seconds
-        if (dur <= 0) { val h = Duration.between(d0, r.start).toHours().toInt(); if (h in 0 until hours) (if (r.band) band else phone)[h] += r.count; continue }
-        for (h in 0 until hours) {
-            val h0 = d0.plus(Duration.ofHours(h.toLong())); val h1 = h0.plus(Duration.ofHours(1))
-            val ov = overlap(r.start, r.end, h0, h1)
-            if (ov > 0) (if (r.band) band else phone)[h] += (r.count * ov + dur / 2) / dur
-        }
-    }
+    val (band, phone) = stepBins(inp.steps, d0, d1, 60)
+    val hours = band.size
     var total = 0L; var fromBand = 0L; var fromPhone = 0L
+    val useBand = BooleanArray(hours); val hourVal = LongArray(hours)
     for (h in 0 until hours) {
-        if (wornHourKey[h] == true || band[h] >= phone[h]) { total += band[h]; fromBand += band[h] }
+        useBand[h] = wornHourKey[h] == true || band[h] >= phone[h]
+        hourVal[h] = if (useBand[h]) band[h] else phone[h]
+        if (useBand[h]) { total += band[h]; fromBand += band[h] }
         else { total += phone[h]; fromPhone += phone[h] }
     }
     o.put("pasi", JSONObject().put("total", total).put("bratara", fromBand).put("telefon", fromPhone))
+    val det = JSONObject()
+    if (total > 0) {
+        val (hb, hp) = stepBins(inp.steps, d0, d1, 30)
+        det.put("pasi", JSONArray(halfHourSteps(hourVal, useBand, hb, hp).toList()))
+    }
 
     // ---- somn
     val ds = sleepFor(d, merged, z)
@@ -240,8 +241,12 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant, s
             if (sn in 0..180) sj.put("snoozeMin", sn).put("snoozeSursa", "alarme") else sj.remove("snoozeMin")
         }
         o.put("somn", sj)
+        det.put("somn", sleepSegments(listOf(ds.night), d0))
     }
-    if (ds.naps.isNotEmpty()) o.put("somnZi", JSONArray(ds.naps.map { JSONObject().put("start", hm(it.start, z)).put("min", mins(it.start, it.end)) }))
+    if (ds.naps.isNotEmpty()) {
+        o.put("somnZi", JSONArray(ds.naps.map { JSONObject().put("start", hm(it.start, z)).put("min", mins(it.start, it.end)) }))
+        det.put("somnZi", sleepSegments(ds.naps, d0))
+    }
 
     // ---- puls
     val puls = JSONObject()
@@ -250,6 +255,9 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant, s
     rest?.let { puls.put("repaus", it) }
     if (hrDay.isNotEmpty()) puls.put("mediu", hrDay.sumOf { it.bpm } / hrDay.size).put("maxim", hrDay.maxOf { it.bpm })
     if (puls.length() > 0) o.put("puls", puls)
+    if (hrDay.isNotEmpty()) det.put("puls", pulse5(hrDay, d0))
+    val sp = inp.spo2Pct.filter { it.t >= d0 && it.t < d1 }.sortedBy { it.t }
+    if (sp.isNotEmpty()) det.put("spo2", JSONArray(sp.map { JSONArray().put(minFrom(d0, it.t)).put(it.pct) }))
 
     // ---- antrenamente
     val ex = inp.exercises.filter { it.start >= d0 && it.start < d1 }.sortedBy { it.start }
@@ -264,6 +272,9 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant, s
         }
         j
     }))
+    // același filtru ca pulsMediu de mai sus; aliniat 1:1 cu antrenamente (listă goală fără puls)
+    val antr = ex.map { e -> workoutHr(inp.hr.filter { it.t >= e.start && it.t <= e.end }, d0) }
+    if (antr.any { it.length() > 0 }) det.put("antr", JSONArray(antr))
 
     // ---- minute (pași + puls) pentru plimbări și anomalii
     val minute = minuteSteps(inp.steps, d0, d1)
@@ -279,7 +290,73 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant, s
             .also { if (isEst) it.put("est", true); if (s.isNotEmpty()) it.put("pulsMediu", s.sumOf { x -> x.bpm } / s.size) }
     }))
     o.put("anomalii", JSONArray(anomalies(inp, minute, d0, d1, ex, z)))
-    return DayCalc(o, status, purtat)
+    return DayCalc(o, status, purtat, det)
+}
+
+// ---- detaliu pe zi (serii pentru grafice). Minutele sunt față de începutul zilei locale (d0); pot fi negative (somnul din seara dinainte).
+
+/** Minute întregi de la d0 la t, rotunjite în jos (și pentru momente dinainte de d0). */
+fun minFrom(d0: Instant, t: Instant): Int = Math.floorDiv(Duration.between(d0, t).seconds, 60L).toInt()
+
+/** Pașii pe intervale de `blockMin` minute de la d0, separat brățară / telefon. O înregistrare se împarte proporțional
+ *  cu suprapunerea (rotunjit pe fiecare interval); cea fără durată intră întreagă în intervalul în care începe. */
+fun stepBins(steps: List<StepRec>, d0: Instant, d1: Instant, blockMin: Long): Pair<LongArray, LongArray> {
+    val n = (Duration.between(d0, d1).toMinutes() / blockMin).toInt()
+    val band = LongArray(n); val phone = LongArray(n)
+    val bl = Duration.ofMinutes(blockMin)
+    for (r in steps) {
+        if (r.end <= d0 || r.start >= d1) continue
+        val dur = Duration.between(r.start, r.end).seconds
+        if (dur <= 0) { val h = (Duration.between(d0, r.start).toMinutes() / blockMin).toInt(); if (h in 0 until n) (if (r.band) band else phone)[h] += r.count; continue }
+        for (h in 0 until n) {
+            val h0 = d0.plus(bl.multipliedBy(h.toLong())); val h1 = h0.plus(bl)
+            val ov = overlap(r.start, r.end, h0, h1)
+            if (ov > 0) (if (r.band) band else phone)[h] += (r.count * ov + dur / 2) / dur
+        }
+    }
+    return band to phone
+}
+
+/** Pașii pe 30 min, aliniați cu `pasi.total`: fiecare oră folosește aceeași sursă ca totalul (useBand); prima jumătate
+ *  primește cât a căzut în ea (cel mult totalul orei), a doua restul. Așa suma e exact pasi.total, deși rotunjirea
+ *  pe 30 min ar putea da ±1 pas față de cea pe oră. Lungimea = 2 × orele zilei (46 / 50 în zilele cu schimbarea orei). */
+fun halfHourSteps(hourVal: LongArray, useBand: BooleanArray, hb: LongArray, hp: LongArray): LongArray {
+    val out = LongArray(hourVal.size * 2)
+    for (h in hourVal.indices) {
+        val first = (if (useBand[h]) hb else hp).getOrElse(2 * h) { 0L }.coerceIn(0L, hourVal[h])
+        out[2 * h] = first; out[2 * h + 1] = hourVal[h] - first
+    }
+    return out
+}
+
+/** Pulsul pe găleți de 5 min: [m, min, medie, max], doar gălețile cu mostre. */
+fun pulse5(hr: List<Hr>, d0: Instant): JSONArray {
+    val g = hr.groupBy { Math.floorDiv(minFrom(d0, it.t), 5) * 5 }.toSortedMap()
+    return JSONArray(g.map { (m, s) -> JSONArray().put(m).put(s.minOf { it.bpm }).put((s.sumOf { it.bpm }.toDouble() / s.size).roundToInt()).put(s.maxOf { it.bpm }) })
+}
+
+/** Faza de somn Health Connect → cod: p profund, r REM, u ușor, t treaz / în afara patului, s somn nespecificat. */
+fun stageCode(type: Int): String = when (type) { DEEP -> "p"; REM -> "r"; LIGHT -> "u"; in AWAKE -> "t"; else -> "s" }
+
+/** Fazele uneia sau mai multor sesiuni: [m0, m1, cod]; sesiunea fără faze = un singur segment „s”. Segmentele alăturate cu același cod se unesc. */
+fun sleepSegments(sessions: List<Sleep>, d0: Instant): JSONArray {
+    val seg = mutableListOf<Triple<Int, Int, String>>()
+    for (s in sessions.sortedBy { it.start }) {
+        val parts = if (s.stages.isEmpty()) listOf(Triple(minFrom(d0, s.start), minFrom(d0, s.end), "s"))
+        else s.stages.sortedBy { it.start }.map { Triple(minFrom(d0, it.start), minFrom(d0, it.end), stageCode(it.type)) }
+        for (p in parts) {
+            if (p.second <= p.first) continue
+            val last = seg.lastOrNull()
+            if (last != null && last.third == p.third && last.second == p.first) seg[seg.size - 1] = Triple(last.first, p.second, p.third) else seg += p
+        }
+    }
+    return JSONArray(seg.map { JSONArray().put(it.first).put(it.second).put(it.third) })
+}
+
+/** Pulsul pe minut într-un antrenament: [m, medie]. */
+fun workoutHr(hr: List<Hr>, d0: Instant): JSONArray {
+    val g = hr.groupBy { minFrom(d0, it.t) }.toSortedMap()
+    return JSONArray(g.map { (m, s) -> JSONArray().put(m).put((s.sumOf { it.bpm }.toDouble() / s.size).roundToInt()) })
 }
 
 fun lowestMean(s: List<Hr>, windowMin: Long): Int? {
@@ -430,6 +507,7 @@ fun buildResult(inp: Input, req: Request, cod: String): JSONObject {
     val cutoff = if (req.scos) inp.now else minOf(inp.now, ls)
     val merged = mergeSleeps(inp.sleeps)
     val zile = JSONObject()
+    val detaliu = JSONObject()
     val status = HashMap<LocalDate, String>()
     var d = req.from
     while (!d.isAfter(req.to)) {
@@ -441,10 +519,10 @@ fun buildResult(inp: Input, req: Request, cod: String): JSONObject {
         val empty = c.json.getJSONObject("pasi").getLong("total") == 0L && !c.json.has("puls") && !c.json.has("somn") &&
             !c.json.has("somnZi") && c.json.getJSONArray("antrenamente").length() == 0
         if (empty) status[d] = "fara_date"
-        else { c.json.put("sincronizatPana", iso(ls, z)); zile.put(d.toString(), c.json); status[d] = c.status }
+        else { c.json.put("sincronizatPana", iso(ls, z)); zile.put(d.toString(), c.json); status[d] = c.status; detaliu.put(d.toString(), c.det) }
         d = d.plusDays(1)
     }
-    res.put("zile", zile)
+    res.put("zile", zile).put("detaliu", detaliu)
 
     // V3: somnul de azi-noapte (doar dacă azi e în cerere și nu e modul azi)
     var v3 = "nu se aplică"
@@ -461,6 +539,7 @@ fun buildResult(inp: Input, req: Request, cod: String): JSONObject {
         if (v3 == "procesare") {
             q.put(JSONObject().put("id", "V3").put("text", "Mi Fitness încă procesează somnul. Reîncearcă în 15 minute.").put("butoane", JSONArray().put("reincearca")))
             day?.put("somn", JSONObject().put("status", "procesare"))
+            detaliu.optJSONObject(today.toString())?.remove("somn")   // fazele doar pentru somnul descris în zi
         } else if (v3 == "lipsa") {
             q.put(JSONObject().put("id", "V3").put("text", "Brățara nu a înregistrat somnul de azi-noapte. Poți trece de mână ora de culcare și de trezire.").put("butoane", JSONArray().put("manual")))
             day?.put("somn", JSONObject().put("status", "lipsa"))

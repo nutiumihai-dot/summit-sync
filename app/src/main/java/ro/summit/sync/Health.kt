@@ -74,13 +74,14 @@ suspend fun loadInput(ctx: Context, req: Request): Input {
         readAll(c, OxygenSaturationRecord::class, hrFrom, now).filterIsInstance<OxygenSaturationRecord>().filter { it.metadata.dataOrigin.packageName == BAND_PKG }
     else emptyList()
     val spo2 = spo2Recs.map { it.time }.distinct().sorted()
+    val spo2Pct = spo2Recs.map { Spo2(it.time, kotlin.math.round(it.percentage.value).toInt()) }.distinctBy { it.t }.sortedBy { it.t }
 
     // Puls sau SpO2: Mi Fitness scrie sub același pachet și pașii numărați de telefon (văzut pe 10 nov, Bluetooth oprit),
     // deci pașii nu dovedesc că brățara s-a sincronizat.
     val bandMod = listOfNotNull(hrRecs.maxOfOrNull { it.metadata.lastModifiedTime }, spo2Recs.maxOfOrNull { it.metadata.lastModifiedTime }).maxOrNull()
     val lastSync = listOfNotNull(hr.lastOrNull()?.t, spo2.lastOrNull()).maxOrNull()
     return Input(z, now, true, bandMod != null && bandMod >= now.minusSeconds(72 * 3600), lastSync, bandMod,
-        hr, steps, sleeps, ex, resting, readAlarmLog(ctx), spo2)
+        hr, steps, sleeps, ex, resting, readAlarmLog(ctx), spo2, spo2Pct)
 }
 
 /** JSON → deflate (fără antet) → base64url fără padding, pentru fragmentul #hc=. */

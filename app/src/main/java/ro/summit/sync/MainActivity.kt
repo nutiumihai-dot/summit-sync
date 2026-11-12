@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
         row2.addView(btn("Pași: șterge") { stepReset(this); out.text = "Instantaneele au fost șterse." })
         row2.addView(btn("Alarme") { report = alarmLogText(this); out.text = report })
         root.addView(row2)
+        root.addView(btn("Deschide Health Connect") { openHealthConnect() })
         out = TextView(this).apply { typeface = Typeface.MONOSPACE; textSize = 11f; setTextIsSelectable(true) }
         root.addView(ScrollView(this).apply { addView(out) }, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
@@ -114,6 +115,20 @@ class MainActivity : ComponentActivity() {
             out.text = try { stepSnapshot(this@MainActivity) } catch (e: Exception) { "EROARE: ${e.javaClass.simpleName}: ${e.message}" }
             report = stepReport(this@MainActivity)
         }
+    }
+
+    /** Setările Health Connect (permisiuni, surse, date). Pe Android 14+ HC e în sistem; pe 11–13 e aplicația din Play,
+     *  iar dacă lipsește, deschidem pagina ei din Magazin Play. */
+    private fun openHealthConnect() {
+        val hcPkg = "com.google.android.apps.healthdata"
+        val tries = listOf(
+            Intent(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS),
+            Intent("android.health.connect.action.HEALTH_HOME_SETTINGS"),
+            Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$hcPkg")),
+            Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$hcPkg")),
+        )
+        for (i in tries) if (runCatching { startActivity(i) }.isSuccess) return
+        Toast.makeText(this, "Nu pot deschide Health Connect", Toast.LENGTH_SHORT).show()
     }
 
     private fun copy() {

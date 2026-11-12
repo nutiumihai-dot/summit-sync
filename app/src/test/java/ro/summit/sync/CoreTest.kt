@@ -248,4 +248,120 @@ class CoreTest {
         // alarmă ștearsă înainte să sune: nu contează
         assertNull(nightAlarms(listOf(AlarmEv(at("2026-11-12T06:00"), at("2026-11-12T07:30")), AlarmEv(at("2026-11-12T06:10"), tm)), night.start, night.end))
     }
+
+    // ---- detaliu (0.13)
+
+    @Test fun detaliu_pulsPe5Minute() {
+        val d0 = at("2026-11-09T00:00")
+        val hr = listOf(Hr(at("2026-11-09T07:00"), 60), Hr(at("2026-11-09T07:02"), 64), Hr(at("2026-11-09T07:04").plusSeconds(59), 71),
+            Hr(at("2026-11-09T07:05"), 90), Hr(at("2026-11-09T23:59").plusSeconds(30), 55))
+        val p = pulse5(hr, d0)
+        assertEquals(3, p.length())
+        assertEquals("[420,60,65,71]", p.getJSONArray(0).toString())   // medie 65 = round(195/3)
+        assertEquals("[425,90,90,90]", p.getJSONArray(1).toString())
+        assertEquals(1435, p.getJSONArray(2).getInt(0))
+        // înainte de 00:00 → minute negative, rotunjite în jos
+        assertEquals(-1, minFrom(d0, at("2026-11-08T23:59").plusSeconds(30)))
+        assertEquals(-5, pulse5(listOf(Hr(at("2026-11-08T23:57"), 50)), d0).getJSONArray(0).getInt(0))
+    }
+
+    @Test fun detaliu_fazeleSomnului() {
+        assertEquals(listOf("p", "r", "u", "t", "t", "t", "s", "s"), listOf(5, 6, 4, 1, 3, 7, 2, 0).map { stageCode(it) })
+        val d0 = at("2026-11-10T00:00")
+        val s = Sleep(at("2026-11-09T23:40"), at("2026-11-10T07:00"), listOf(
+            st("2026-11-09T23:40", "2026-11-10T00:10", 4),
+            st("2026-11-10T00:10", "2026-11-10T01:00", 4),    // același cod, alăturat → unit
+            st("2026-11-10T01:00", "2026-11-10T02:30", 5),
+            st("2026-11-10T02:30", "2026-11-10T02:40", 7),
+            st("2026-11-10T02:40", "2026-11-10T07:00", 6)))
+        assertEquals("[[-20,60,\"u\"],[60,150,\"p\"],[150,160,\"t\"],[160,420,\"r\"]]", sleepSegments(listOf(s), d0).toString())
+        // fără faze: un singur segment „s”; somnul de zi: mai multe sesiuni în aceeași listă
+        val naps = listOf(Sleep(at("2026-11-10T15:00"), at("2026-11-10T15:40")), Sleep(at("2026-11-10T13:00"), at("2026-11-10T13:20")))
+        assertEquals("[[780,800,\"s\"],[900,940,\"s\"]]", sleepSegments(naps, d0).toString())
+    }
+
+    @Test fun detaliu_pasiPe30Min_sumaEgalaCuTotalul() {
+        // pe ore: brățara în ora 10, telefonul în ora 18; pe 30 min se împarte după cât a căzut în fiecare jumătate
+        val hourVal = LongArray(24).also { it[10] = 1000; it[18] = 2000 }
+        val useBand = BooleanArray(24) { it != 18 }
+        val hb = LongArray(48).also { it[20] = 333; it[21] = 668 }   // rotunjire pe 30 min: 1001 ≠ 1000
+        val hp = LongArray(48).also { it[36] = 1500; it[37] = 500; it[20] = 450; it[21] = 450 }
+        val b = halfHourSteps(hourVal, useBand, hb, hp)
+        assertEquals(48, b.size)
+        assertEquals(333, b[20]); assertEquals(667, b[21])
+        assertEquals(1500, b[36]); assertEquals(500, b[37])
+        assertEquals(3000, b.sum())
+        // aceeași înregistrare de o oră, împărțită pe două jumătăți
+        val (bb, _) = stepBins(listOf(StepRec(at("2026-11-09T10:00"), at("2026-11-09T11:00"), 1000, true)), at("2026-11-09T00:00"), at("2026-11-10T00:00"), 30)
+        assertEquals(500, bb[20]); assertEquals(500, bb[21])
+    }
+
+    @Test fun detaliu_inRezultat() {
+        // ziua parțială: brățara 7–15, telefonul seara; plus antrenament cu puls și SpO2
+        val hr = hrEvery("2026-11-09T07:00", "2026-11-09T15:00", stepMin = 1)
+        val sleep = Sleep(at("2026-11-08T23:30"), at("2026-11-09T07:00"), listOf(st("2026-11-08T23:30", "2026-11-09T03:00", 4), st("2026-11-09T03:00", "2026-11-09T07:00", 5)))
+        val steps = listOf(
+            StepRec(at("2026-11-09T10:00"), at("2026-11-09T11:00"), 1001, band = true),
+            StepRec(at("2026-11-09T10:00"), at("2026-11-09T11:00"), 900, band = false),
+            StepRec(at("2026-11-09T18:15"), at("2026-11-09T18:45"), 2000, band = false),
+            StepRec(at("2026-11-09T14:30"), at("2026-11-09T14:59"), 944, band = true),
+        )
+        val ex = listOf(Exercise(at("2026-11-09T12:00"), at("2026-11-09T12:10"), 70, null, null), Exercise(at("2026-11-09T20:00"), at("2026-11-09T20:30"), 79, null, null))
+        val spo2 = listOf(Spo2(at("2026-11-09T03:10"), 96), Spo2(at("2026-11-09T03:20"), 94))
+        val inp = input("2026-11-10T08:00", hr, listOf(sleep), steps, lastSync = "2026-11-10T07:50").copy(exercises = ex, spo2Pct = spo2)
+        val r = buildResult(inp, Request(LocalDate.parse("2026-11-08"), LocalDate.parse("2026-11-09"), scos = true), "k7q2")
+        val zi = r.getJSONObject("zile").getJSONObject("2026-11-09")
+        val det = r.getJSONObject("detaliu").getJSONObject("2026-11-09")
+        assertEquals(r.getJSONObject("zile").length(), r.getJSONObject("detaliu").length())
+        val pasi = det.getJSONArray("pasi")
+        assertEquals(48, pasi.length())
+        assertEquals(zi.getJSONObject("pasi").getLong("total"), (0 until 48).sumOf { pasi.getLong(it) })
+        assertEquals(944, pasi.getLong(29))
+        assertEquals(1001, pasi.getLong(20) + pasi.getLong(21))      // ora 10: brățara (purtată), nu telefonul
+        assertEquals(1000, pasi.getLong(36)); assertEquals(1000, pasi.getLong(37))   // telefonul 18:15–18:45, jumătate în fiecare bloc
+        assertEquals(96, det.getJSONArray("puls").length())          // 8 h × 12 găleți
+        assertEquals("[[190,96],[200,94]]", det.getJSONArray("spo2").toString())
+        assertEquals("[[-30,180,\"u\"],[180,420,\"p\"]]", det.getJSONArray("somn").toString())
+        assertFalse(det.has("somnZi"))
+        val antr = det.getJSONArray("antr")
+        assertEquals(zi.getJSONArray("antrenamente").length(), antr.length())
+        assertEquals(11, antr.getJSONArray(0).length())               // 12:00..12:10 inclusiv, ca pulsMediu
+        assertEquals("[720,70]", antr.getJSONArray(0).getJSONArray(0).toString())
+        assertEquals(0, antr.getJSONArray(1).length())               // fără puls
+        // fără SpO2 permis → fără cheie
+        val r2 = buildResult(inp.copy(spo2Pct = emptyList()), Request(LocalDate.parse("2026-11-09"), LocalDate.parse("2026-11-09"), scos = true), "k7q2")
+        assertFalse(r2.getJSONObject("detaliu").getJSONObject("2026-11-09").has("spo2"))
+    }
+
+    @Test fun detaliu_marimea14Zile() {
+        // cel mai rău caz realist: puls la fiecare minut 14 zile, SpO2 la 10 min, noapte cu faze la 20 min, pași pe 30 min
+        val rnd = java.util.Random(7)
+        val from = LocalDate.parse("2026-10-29"); val to = LocalDate.parse("2026-11-11")
+        val hr = mutableListOf<Hr>(); val spo2 = mutableListOf<Spo2>(); val sleeps = mutableListOf<Sleep>(); val steps = mutableListOf<StepRec>()
+        var t = at("2026-10-28T20:00")
+        while (t < at("2026-11-12T08:00")) {
+            hr += Hr(t, 55 + rnd.nextInt(60)); if (rnd.nextInt(10) == 0) spo2 += Spo2(t, 92 + rnd.nextInt(7))
+            t = t.plusSeconds(60)
+        }
+        var d = from
+        while (!d.isAfter(to)) {
+            val s0 = d.atStartOfDay(z).toInstant().minusSeconds(3600); val stages = (0 until 24).map { k -> Stage(s0.plusSeconds(k * 1200L), s0.plusSeconds((k + 1) * 1200L), listOf(4, 5, 6, 1)[rnd.nextInt(4)]) }
+            sleeps += Sleep(s0, s0.plusSeconds(8 * 3600), stages)
+            for (k in 14 until 46) steps += StepRec(d.atStartOfDay(z).toInstant().plusSeconds(k * 1800L), d.atStartOfDay(z).toInstant().plusSeconds(k * 1800L + 1799), rnd.nextInt(1500).toLong(), true)
+            d = d.plusDays(1)
+        }
+        val inp = Input(z, at("2026-11-12T08:30"), true, true, hr.last().t, hr = hr, steps = steps, sleeps = sleeps, exercises = emptyList(), resting = emptyList(),
+            spo2 = spo2.map { it.t }, spo2Pct = spo2)
+        val r = buildResult(inp, Request(from, to), "k7q2")
+        val det = r.getJSONObject("detaliu").toString()
+        fun packed(s: String): Int {
+            val bo = java.io.ByteArrayOutputStream()
+            java.util.zip.DeflaterOutputStream(bo, java.util.zip.Deflater(9, true)).use { it.write(s.toByteArray()) }
+            return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bo.toByteArray()).length
+        }
+        val all = packed(r.toString()); val onlyDet = packed(det)
+        println("MARIME 14 zile: rezultat ${r.toString().length} B JSON → $all B base64; detaliu ${det.length} B JSON → $onlyDet B base64 (${onlyDet / 14} B/zi)")
+        assertEquals(14, r.getJSONObject("detaliu").length())
+        assertTrue("prea mare: $all", all < 200_000)
+    }
 }
