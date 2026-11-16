@@ -168,6 +168,28 @@ class CoreTest {
         assertEquals("complet", c.status)   // puls la 10 min acoperă toate ferestrele de 15 min
     }
 
+    @Test fun pasiSuspecte_masinaCaPe14Nov() {
+        // ca sâmbătă 14 nov: Uber 04:30–05:00, Mi Fitness a scris 8953 pași într-un bloc de 30 min
+        val steps = listOf(
+            StepRec(at("2026-11-14T04:00"), at("2026-11-14T04:29"), 357, true),
+            StepRec(at("2026-11-14T04:30"), at("2026-11-14T04:59"), 8953, true),
+            StepRec(at("2026-11-14T04:40"), at("2026-11-14T04:41"), 40, false),
+            StepRec(at("2026-11-14T12:00"), at("2026-11-14T12:29"), 1600, true),
+        )
+        val inp = input("2026-11-15T08:00", hrEvery("2026-11-14T00:00", "2026-11-15T00:00", stepMin = 10), steps = steps, lastSync = "2026-11-15T07:00")
+        val c = computeDay(LocalDate.parse("2026-11-14"), inp, emptyList(), at("2026-11-15T07:00"))
+        assertEquals(357L + 8953 + 1600, c.json.getJSONObject("pasi").getLong("total"))   // totalul rămâne; corecția o face el
+        val s = c.json.getJSONArray("pasiSuspecte")
+        assertEquals(1, s.length())
+        assertEquals("04:30", s.getJSONObject(0).getString("start"))
+        assertEquals(8953L, s.getJSONObject(0).getLong("pasi"))
+        assertEquals(40L, s.getJSONObject(0).getLong("telefon"))
+        val w = c.json.getJSONArray("plimbari")
+        assertEquals(1, w.length())                      // blocul din mașină nu e plimbare
+        assertEquals("12:00", w.getJSONObject(0).getString("start"))
+        assertFalse(computeDay(LocalDate.parse("2026-11-14"), inp.copy(steps = steps.filter { it.count != 8953L }), emptyList(), at("2026-11-15T07:00")).json.has("pasiSuspecte"))
+    }
+
     @Test fun anomalie_pulsMareInRepaus() {
         val hr = hrEvery("2026-11-09T07:00", "2026-11-09T22:00", stepMin = 10).map { if (it.t >= at("2026-11-09T15:00") && it.t < at("2026-11-09T15:30")) Hr(it.t, 160) else it }
         val inp = input("2026-11-10T08:00", hr, lastSync = "2026-11-10T07:00")

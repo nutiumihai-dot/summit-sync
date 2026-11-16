@@ -75,6 +75,7 @@ object P {
     var WALK_SPM_EST = 105L           // pași/min pentru durata estimată
     var AZI_FRESH_MIN = 30L           // modul azi: ultima sincronizare cel mult acum 30 min
     var HR_GAP_MIN = 120L             // pulsul rămas în urmă cu peste 2 h față de restul datelor = lipsește
+    var SUSPECT_SPM = 200L            // peste 200 pași/min pe un bloc de 30 min = imposibil pe jos (ex. vibrațiile din mașină)
 }
 
 private val AWAKE = setOf(1, 3, 7)
@@ -222,6 +223,12 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant, s
         else { total += phone[h]; fromPhone += phone[h] }
     }
     o.put("pasi", JSONObject().put("total", total).put("bratara", fromBand).put("telefon", fromPhone))
+    // blocuri de 30 min imposibile pe jos: rămân în total (corecția o face el, scriind pașii de mână), dar sunt semnalate
+    val (sb, sp) = stepBins(inp.steps, d0, d1, 30)
+    val susp = sb.indices.filter { sb[it] > P.SUSPECT_SPM * 30 }
+    if (susp.isNotEmpty()) o.put("pasiSuspecte", JSONArray(susp.map { b ->
+        JSONObject().put("start", hm(d0.plusSeconds(b * 1800L), z)).put("min", 30).put("pasi", sb[b]).put("telefon", sp[b])
+    }))
     val det = JSONObject()
     if (total > 0) {
         val (hb, hp) = stepBins(inp.steps, d0, d1, 30)
@@ -281,13 +288,15 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant, s
     // plimbări: pe minut din pedometrul telefonului (când telefonul a fost la el); altfel din blocurile Mi Fitness de 30 min
     val phoneMin = minuteSteps(inp.steps.filter { !it.band }, d0, d1)
     val exact = walksMinute(phoneMin, d0, ex)
-    val est = walks(inp.steps.filter { it.band && it.start >= d0 && it.start < d1 }, ex).filter { (a, b, _) -> exact.none { overlap(it.first, it.second, a, b) > 0 } }
+    val est = walks(inp.steps.filter { it.band && it.start >= d0 && it.start < d1 && !suspectRec(it) }, ex).filter { (a, b, _) -> exact.none { overlap(it.first, it.second, a, b) > 0 } }
+    val suspIv = susp.map { d0.plusSeconds(it * 1800L) to d0.plusSeconds(it * 1800L + 1800L) }
     val wl = exact.map { (a, b) -> Triple(a, b, stepsBetween(phoneMin, d0, a, b)) to false } + est.map { it to true }
     o.put("plimbari", JSONArray(wl.sortedBy { it.first.first }.map { (w, isEst) ->
         val (a, b, n) = w
         val s = inp.hr.filter { it.t >= a && it.t < b }
         JSONObject().put("start", hm(a, z)).put("min", if (isEst) (n / P.WALK_SPM_EST).toInt() else mins(a, b).toInt()).put("pasi", n)
             .also { if (isEst) it.put("est", true); if (s.isNotEmpty()) it.put("pulsMediu", s.sumOf { x -> x.bpm } / s.size) }
+            .also { if (suspIv.any { (x0, x1) -> overlap(x0, x1, a, b) > 0 }) it.put("suspect", true) }
     }))
     o.put("anomalii", JSONArray(anomalies(inp, minute, d0, d1, ex, z)))
     return DayCalc(o, status, purtat, det)
@@ -406,6 +415,9 @@ fun stepsBetween(m: LongArray, d0: Instant, a: Instant, b: Instant): Long {
     val i0 = mins(d0, a).toInt().coerceIn(0, m.size); val i1 = mins(d0, b).toInt().coerceIn(0, m.size)
     return (i0 until i1).sumOf { m[it] }
 }
+
+/** Un bloc al brățării cu mai mulți pași decât se pot face pe jos (≥30 min de referință, ca blocurile Mi Fitness). */
+fun suspectRec(r: StepRec): Boolean = r.band && r.count > P.SUSPECT_SPM * max(30L, mins(r.start, r.end))
 
 /** Plimbări: blocuri de pași ale brățării cu ≥1000 pași / 30 min, unite dacă sunt alăturate, în afara antrenamentelor.
  *  Mi Fitness scrie pașii pe 30 min, deci durata e estimată din pași (≈105 pași/min). */
