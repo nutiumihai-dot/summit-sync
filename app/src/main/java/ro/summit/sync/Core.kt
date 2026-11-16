@@ -224,10 +224,10 @@ fun computeDay(d: LocalDate, inp: Input, merged: List<Sleep>, cutoff: Instant, s
     }
     o.put("pasi", JSONObject().put("total", total).put("bratara", fromBand).put("telefon", fromPhone))
     // blocuri de 30 min imposibile pe jos: rămân în total (corecția o face el, scriind pașii de mână), dar sunt semnalate
-    val (sb, sp) = stepBins(inp.steps, d0, d1, 30)
+    val (sb, sPh) = stepBins(inp.steps, d0, d1, 30)
     val susp = sb.indices.filter { sb[it] > P.SUSPECT_SPM * 30 }
     if (susp.isNotEmpty()) o.put("pasiSuspecte", JSONArray(susp.map { b ->
-        JSONObject().put("start", hm(d0.plusSeconds(b * 1800L), z)).put("min", 30).put("pasi", sb[b]).put("telefon", sp[b])
+        JSONObject().put("start", hm(d0.plusSeconds(b * 1800L), z)).put("min", 30).put("pasi", sb[b]).put("telefon", sPh[b])
     }))
     val det = JSONObject()
     if (total > 0) {
