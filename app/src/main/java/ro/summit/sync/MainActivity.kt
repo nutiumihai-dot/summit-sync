@@ -83,7 +83,8 @@ class MainActivity : ComponentActivity() {
                 buildResult(loadInput(this@MainActivity, r.req), r.req, r.cod).also { res ->
                     // următoarea alarmă din telefon (fără permisiuni): propunere pentru „prima alarmă” în card
                     getSystemService(android.app.AlarmManager::class.java)?.nextAlarmClock?.let { a ->
-                        res.put("alarma", hm(java.time.Instant.ofEpochMilli(a.triggerTime), java.time.ZoneId.systemDefault()))
+                        val next = realAlarm(readAlarmLog(this@MainActivity), java.time.Instant.ofEpochMilli(a.triggerTime))
+                        res.put("alarma", hm(next, java.time.ZoneId.systemDefault()))
                     }
                 }.toString()
             } catch (e: Exception) {

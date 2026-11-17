@@ -271,6 +271,55 @@ class CoreTest {
         assertNull(nightAlarms(listOf(AlarmEv(at("2026-11-12T06:00"), at("2026-11-12T07:30")), AlarmEv(at("2026-11-12T06:10"), tm)), night.start, night.end))
     }
 
+    /** Jurnalul real din 11–17 nov: alarma de 08:30 (L–V), ceasul Xiaomi înscrie un marcaj la −60 min (notificări pornite),
+     *  apoi la −15 min (notificări oprite). Receptorul n-a primit nimic între 11 nov 11:05 și 17 nov 12:28. */
+    @Test fun alarme_marcajulCeasuluiXiaomi() {
+        fun ev(t: String, n: String?) = AlarmEv(at(t), n?.let { at(it) })
+        val log = listOf(
+            ev("2026-11-11T11:01:18", "2026-11-12T08:30"),
+            ev("2026-11-11T11:01:55", "2026-11-12T08:30"),
+            ev("2026-11-11T11:01:55", "2026-11-12T07:30"),
+            ev("2026-11-11T11:02:11", "2026-11-11T11:03"),
+            ev("2026-11-11T11:03:00", null),
+            ev("2026-11-11T11:03:00", "2026-11-12T07:30"),
+            AlarmEv(at("2026-11-11T11:03:06"), at("2026-11-12T08:30")),
+            AlarmEv(at("2026-11-11T11:03:06"), at("2026-11-11T11:13:06")),
+            ev("2026-11-11T11:05:03", "2026-11-12T07:30"),
+            AlarmEv(at("2026-11-12T10:23:47"), at("2026-11-13T07:30")),
+            AlarmEv(at("2026-11-13T10:09:16"), at("2026-11-16T07:30")),
+            AlarmEv(at("2026-11-16T11:38:08"), at("2026-11-17T07:30")),
+            AlarmEv(at("2026-11-17T10:54:40"), at("2026-11-18T07:30")),
+            ev("2026-11-17T12:32:07", null),
+            ev("2026-11-17T12:40:00", null),
+            AlarmEv(at("2026-11-17T12:40:26"), at("2026-11-18T08:30")),
+            AlarmEv(at("2026-11-17T12:40:26").plusMillis(200), at("2026-11-18T08:15")),
+        )
+        // 12 nov: marcajul de 07:30 nu e alarmă; alarma reală 08:30, ridicare 08:38 → snooze 8; „oprită” la 10:23 = doar deschiderea aplicației
+        val n12 = nightAlarms(log, at("2026-11-12T00:29"), at("2026-11-12T09:08"))!!
+        assertEquals(at("2026-11-12T08:30"), n12.first)
+        assertEquals(1, n12.rings)
+        assertNull(n12.stopped)
+        assertEquals(at("2026-11-16T08:30"), nightAlarms(log, at("2026-11-16T03:42"), at("2026-11-16T10:07"))!!.first)
+        // propunerea din card: următoarea alarmă raportată e marcajul de 08:15 → 08:30
+        assertEquals(at("2026-11-18T08:30"), realAlarm(log, at("2026-11-18T08:15")))
+
+        // 18 nov cu receptorul pornit: marcajul 08:15 trece (următoarea devine 08:30), 08:30 sună, snooze 10 min, oprită
+        val tm = at("2026-11-19T08:15")
+        val n18 = nightAlarms(log + listOf(
+            AlarmEv(at("2026-11-18T08:15").plusSeconds(1), at("2026-11-18T08:30")),
+            AlarmEv(at("2026-11-18T08:30").plusSeconds(2), tm),
+            AlarmEv(at("2026-11-18T08:31:07"), at("2026-11-18T08:41:07")),
+            AlarmEv(at("2026-11-18T08:41:09"), tm),
+            AlarmEv(at("2026-11-18T08:43:20"), tm),
+        ), at("2026-11-18T00:30"), at("2026-11-18T09:30"))!!
+        assertEquals(at("2026-11-18T08:30"), n18.first)
+        assertEquals(2, n18.rings)
+        assertEquals(at("2026-11-18T08:41:09"), n18.stopped)
+
+        // fără marcaj învățat, comportamentul vechi rămâne neschimbat
+        assertEquals(at("2026-11-18T08:15"), realAlarm(emptyList(), at("2026-11-18T08:15")))
+    }
+
     // ---- detaliu (0.13)
 
     @Test fun detaliu_pulsPe5Minute() {

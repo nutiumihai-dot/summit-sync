@@ -29,15 +29,51 @@ data class NightAlarms(val first: Instant, val rings: Int, val stopped: Instant?
  *  rings = de câte ori a sunat (1 + snooze-uri); stopped = când n-a mai urmat nicio alarmă în următoarele 45 min. */
 fun nightAlarms(ev: List<AlarmEv>, from: Instant, to: Instant): NightAlarms? {
     val e = ev.sortedBy { it.t }
+    val marks = markerOffsets(e)
     val rings = sortedSetOf<Instant>()
     for (i in 1 until e.size) {
         val prev = e[i - 1].next ?: continue
-        if (prev <= e[i].t.plusSeconds(60) && prev >= from && prev <= to) rings += prev
+        if (prev > e[i].t.plusSeconds(60)) continue
+        val d = offsetAt(marks, prev)
+        if (d != null) {
+            val real = prev.plus(d)
+            // marcajul ceasului: după el urmează alarma reală (prev + d), sau n-am văzut nimic până după ea (receptor oprit)
+            if (e[i].next == real) continue
+            if (e[i].t > real) { if (real >= from && real <= to) rings += real; continue }
+        }
+        if (prev >= from && prev <= to) rings += prev
     }
     if (rings.isEmpty()) return null
     val last = rings.last()
+    // „oprită” doar dacă am văzut-o; o primă înregistrare la peste o oră după alarmă e doar deschiderea aplicației
     val stopped = e.firstOrNull { it.t >= last.minusSeconds(60) && (it.next == null || it.next > it.t.plusSeconds(45 * 60)) }?.t
+        ?.takeIf { Duration.between(last, it) <= Duration.ofMinutes(60) }
     return NightAlarms(rings.first(), rings.size, stopped)
+}
+
+/** Ceasul Xiaomi (HyperOS) înscrie lângă fiecare alarmă recurentă un marcaj mai devreme (60 min cu notificările pornite,
+ *  15 min fără ele) care nu sună, dar pe care Android îl raportează ca „următoarea alarmă”. La fiecare reprogramare,
+ *  în aceeași secundă apare întâi alarma reală, apoi marcajul. De aici învățăm decalajul (cu momentul în care l-am văzut). */
+fun markerOffsets(sorted: List<AlarmEv>): List<Pair<Instant, Duration>> {
+    val out = mutableListOf<Pair<Instant, Duration>>()
+    for (i in 1 until sorted.size) {
+        val a = sorted[i - 1]; val b = sorted[i]
+        val an = a.next ?: continue; val bn = b.next ?: continue
+        if (Duration.between(a.t, b.t).abs() > Duration.ofSeconds(5) || an <= a.t || bn <= b.t) continue
+        val d = Duration.between(bn, an)
+        if (d >= Duration.ofMinutes(1) && d <= Duration.ofMinutes(90) && d.toMillis() % 60_000 == 0L) out += b.t to d
+    }
+    return out
+}
+
+/** Decalajul în vigoare la momentul t (ultimul văzut înainte de t). */
+fun offsetAt(marks: List<Pair<Instant, Duration>>, t: Instant): Duration? = marks.lastOrNull { it.first <= t }?.second
+
+/** Pentru propunerea din card: dacă `x` e marcajul ceasului și jurnalul a văzut alarma reală, o întoarce pe aceea. */
+fun realAlarm(ev: List<AlarmEv>, x: Instant): Instant {
+    val d = offsetAt(markerOffsets(ev.sortedBy { it.t }), x) ?: return x
+    val real = x.plus(d)
+    return if (ev.any { it.next == real }) real else x
 }
 
 data class Input(
